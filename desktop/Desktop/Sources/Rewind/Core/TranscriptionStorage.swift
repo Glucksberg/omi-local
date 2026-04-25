@@ -808,6 +808,28 @@ actor TranscriptionStorage {
         }
     }
 
+    /// Get one local conversation with transcript segments loaded.
+    func getLocalConversation(backendId: String) async throws -> ServerConversation? {
+        let db = try await ensureInitialized()
+
+        return try await db.read { database in
+            guard let session = try TranscriptionSessionRecord
+                .filter(Column("backendId") == backendId)
+                .fetchOne(database),
+                let sessionId = session.id
+            else {
+                return nil
+            }
+
+            let segments = try TranscriptionSegmentRecord
+                .filter(Column("sessionId") == sessionId)
+                .order(Column("segmentOrder").asc)
+                .fetchAll(database)
+
+            return session.toServerConversation(segments: segments)
+        }
+    }
+
     /// Get count of local conversations
     func getLocalConversationsCount(starredOnly: Bool = false) async throws -> Int {
         let db = try await ensureInitialized()

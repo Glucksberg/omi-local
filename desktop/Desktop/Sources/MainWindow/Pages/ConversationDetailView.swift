@@ -169,14 +169,24 @@ struct ConversationDetailView: View {
             }
         }
         .task {
+            let shouldLoadConversation = conversation.transcriptSegments.isEmpty
+            if LocalMode.isEnabled {
+                showTranscriptDrawer = true
+                if shouldLoadConversation {
+                    isLoadingConversation = true
+                }
+            }
+
             await appProvider.fetchApps()
             await onFetchPeople?()
             AnalyticsManager.shared.conversationDetailOpened(conversationId: conversation.id)
 
             // Load segments from local database if not already present
             // Segments are stored locally but not loaded with the list view for performance
-            if conversation.transcriptSegments.isEmpty {
-                isLoadingConversation = true
+            if shouldLoadConversation {
+                if !isLoadingConversation {
+                    isLoadingConversation = true
+                }
                 do {
                     // First try local database (faster, works offline)
                     if let session = try await TranscriptionStorage.shared.getSessionByBackendId(conversation.id) {
@@ -562,6 +572,10 @@ struct ConversationDetailView: View {
         // Overview section
         if !displayConversation.overview.isEmpty {
             overviewSection
+        } else if LocalMode.isEnabled && isLoadingConversation {
+            transcriptLoadingSection
+        } else if LocalMode.isEnabled && !displayConversation.transcriptSegments.isEmpty {
+            inlineTranscriptSection
         }
 
         // Metadata chips
@@ -760,6 +774,49 @@ struct ConversationDetailView: View {
             SelectableMarkdown(text: displayConversation.overview, sender: .ai)
                 .textSelection(.enabled)
                 .environment(\.colorScheme, .dark)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var transcriptLoadingSection: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .scaleEffect(0.8)
+
+            Text("Loading transcript...")
+                .scaledFont(size: 14)
+                .foregroundColor(OmiColors.textTertiary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var inlineTranscriptSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 6) {
+                Image(systemName: "text.quote")
+                    .scaledFont(size: 13)
+                    .foregroundColor(OmiColors.purplePrimary)
+
+                Text("Transcript")
+                    .scaledFont(size: 14, weight: .semibold)
+                    .foregroundColor(OmiColors.textSecondary)
+
+                Text("\(displayConversation.transcriptSegments.count)")
+                    .scaledFont(size: 11, weight: .medium)
+                    .foregroundColor(OmiColors.purplePrimary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 2)
+                    .background(
+                        Capsule()
+                            .fill(OmiColors.purplePrimary.opacity(0.15))
+                    )
+            }
+
+            Text(displayConversation.transcript)
+                .scaledFont(size: 13)
+                .foregroundColor(OmiColors.textPrimary)
+                .textSelection(.enabled)
+                .lineSpacing(4)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }

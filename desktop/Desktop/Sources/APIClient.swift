@@ -346,6 +346,12 @@ extension APIClient {
 
   /// Fetches a single conversation by ID
   func getConversation(id: String) async throws -> ServerConversation {
+    if LocalMode.isEnabled,
+      let localConversation = try await TranscriptionStorage.shared.getLocalConversation(backendId: id)
+    {
+      return localConversation
+    }
+
     return try await get("v1/conversations/\(id)")
   }
 
@@ -4668,6 +4674,10 @@ extension APIClient {
 
   /// Fetches all people for the current user
   func getPeople() async throws -> [Person] {
+    if LocalMode.isEnabled {
+      return Self.loadLocalPeople()
+    }
+
     return try await get("v1/users/people")
   }
 
@@ -4676,6 +4686,21 @@ extension APIClient {
     struct CreatePersonRequest: Encodable {
       let name: String
     }
+
+    if LocalMode.isEnabled {
+      let now = Date()
+      let person = Person(
+        id: "local_person_\(UUID().uuidString)",
+        name: name,
+        createdAt: now,
+        updatedAt: now
+      )
+      var people = Self.loadLocalPeople()
+      people.append(person)
+      Self.saveLocalPeople(people)
+      return person
+    }
+
     return try await post("v1/users/people", body: CreatePersonRequest(name: name))
   }
 
@@ -4686,6 +4711,10 @@ extension APIClient {
     isUser: Bool,
     personId: String?
   ) async throws {
+    if LocalMode.isEnabled {
+      return
+    }
+
     struct AssignBulkRequest: Encodable {
       let assignType: String
       let value: String?
@@ -4716,6 +4745,22 @@ extension APIClient {
     else {
       throw APIError.httpError(statusCode: (response as? HTTPURLResponse)?.statusCode ?? 0)
     }
+  }
+
+  private static var localPeopleDefaultsKey: String {
+    "omi-local.people.v1"
+  }
+
+  private static func loadLocalPeople() -> [Person] {
+    guard let data = UserDefaults.standard.data(forKey: localPeopleDefaultsKey) else {
+      return []
+    }
+    return (try? JSONDecoder().decode([Person].self, from: data)) ?? []
+  }
+
+  private static func saveLocalPeople(_ people: [Person]) {
+    guard let data = try? JSONEncoder().encode(people) else { return }
+    UserDefaults.standard.set(data, forKey: localPeopleDefaultsKey)
   }
 
   // MARK: - LLM Usage
