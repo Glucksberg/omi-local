@@ -832,7 +832,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     let audioRecordingItem = NSMenuItem()
     let audioRecordingView = makeToggleItemView(
-      title: "Audio Recording",
+      title: LocalMode.isEnabled ? "Ambient Transcription" : "Audio Recording",
       iconName: "mic.fill",
       isOn: AssistantSettings.shared.transcriptionEnabled,
       action: #selector(audioRecordingToggled(_:))

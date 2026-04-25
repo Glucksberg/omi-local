@@ -17,6 +17,7 @@ class AssistantSettings {
     private let transcriptionVocabularyKey = "transcriptionVocabulary"
     private let vadGateEnabledKey = "vadGateEnabled"
     private let batchTranscriptionEnabledKey = "batchTranscriptionEnabled"
+    private let localAmbientTranscriptionDefaultDisabledKey = "omiLocalAmbientTranscriptionDefaultDisabled_v1"
 
     // MARK: - Default Values
 
@@ -24,7 +25,7 @@ class AssistantSettings {
     private let defaultGlowOverlayEnabled = false
     private let defaultAnalysisDelay = 60 // seconds (1 minute)
     private let defaultScreenAnalysisEnabled = true
-    private let defaultTranscriptionEnabled = true
+    private var defaultTranscriptionEnabled: Bool { !LocalMode.isEnabled }
     private let defaultTranscriptionLanguage = "en"
     private let defaultTranscriptionAutoDetect = true
     private let defaultTranscriptionVocabulary: [String] = []
@@ -45,9 +46,20 @@ class AssistantSettings {
             vadGateEnabledKey: defaultVadGateEnabled,
             batchTranscriptionEnabledKey: defaultBatchTranscriptionEnabled,
         ])
+
+        applyLocalModePrivacyDefaultsIfNeeded()
     }
 
     // MARK: - Properties
+
+    private func applyLocalModePrivacyDefaultsIfNeeded() {
+        guard LocalMode.isEnabled else { return }
+        guard !UserDefaults.standard.bool(forKey: localAmbientTranscriptionDefaultDisabledKey) else { return }
+
+        UserDefaults.standard.set(false, forKey: transcriptionEnabledKey)
+        UserDefaults.standard.set(true, forKey: localAmbientTranscriptionDefaultDisabledKey)
+        log("AssistantSettings: omi-local ambient transcription disabled by default")
+    }
 
     /// Cooldown interval between notifications in minutes
     var cooldownInterval: Int {

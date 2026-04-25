@@ -512,7 +512,12 @@ struct OnboardingView: View {
       AnalyticsManager.shared.launchAtLoginChanged(enabled: true, source: "onboarding_complete")
     }
     startMonitoringIfNeeded()
-    appState.startTranscription()
+    if LocalMode.isEnabled {
+      AssistantSettings.shared.transcriptionEnabled = false
+      log("OnboardingView: omi-local ambient transcription remains off after onboarding")
+    } else {
+      appState.startTranscription()
+    }
 
     // Create welcome task
     Task {

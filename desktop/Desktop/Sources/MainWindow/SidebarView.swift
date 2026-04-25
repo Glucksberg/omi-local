@@ -121,6 +121,22 @@ struct SidebarView: View {
     isCollapsed ? collapsedWidth : expandedWidth
   }
 
+  private var microphoneToggleTitle: String {
+    LocalMode.isEnabled ? "Ambient Transcription" : "Microphone"
+  }
+
+  private var microphoneToggleHelpEnabled: String {
+    LocalMode.isEnabled
+      ? "Click to turn off ambient transcription"
+      : "Click to turn off Microphone transcription"
+  }
+
+  private var microphoneToggleHelpDisabled: String {
+    LocalMode.isEnabled
+      ? "Click to turn on ambient transcription"
+      : "Click to turn on Microphone transcription"
+  }
+
   /// Whether a sidebar item is locked at the current tier level
   private func isItemLocked(_ item: SidebarNavItem) -> Bool {
     currentTierLevel != 0 && currentTierLevel < item.requiredTier
@@ -1093,10 +1109,11 @@ struct SidebarView: View {
         .scaleEffect(permissionPulse && isDenied ? 1.1 : 1.0)
 
       if isExpanded {
-        Text("Microphone")
+        Text(microphoneToggleTitle)
           .scaledFont(size: 13, weight: .medium)
           .foregroundColor(titleColor)
           .lineLimit(1)
+          .minimumScaleFactor(0.8)
 
         Spacer()
 
@@ -1140,8 +1157,8 @@ struct SidebarView: View {
     .help(
       isToggleable
         ? (isActive
-          ? "Click to turn off Microphone transcription"
-          : "Click to turn on Microphone transcription")
+          ? microphoneToggleHelpEnabled
+          : microphoneToggleHelpDisabled)
         : (isExpanded ? "" : "Microphone permission required")
     )
 

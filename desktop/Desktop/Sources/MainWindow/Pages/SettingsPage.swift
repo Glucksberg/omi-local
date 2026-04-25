@@ -428,6 +428,23 @@ struct SettingsContentView: View {
     _transcriptionAutoDetect = State(initialValue: settings.transcriptionAutoDetect)
   }
 
+  /// Display copy for the main audio capture toggle.
+  private var audioRecordingTitle: String {
+    LocalMode.isEnabled ? "Ambient Transcription" : "Audio Recording"
+  }
+
+  private var audioRecordingActiveDescription: String {
+    LocalMode.isEnabled
+      ? "Listening to room audio and saving local transcripts"
+      : "Recording and transcribing audio"
+  }
+
+  private var audioRecordingPausedDescription: String {
+    LocalMode.isEnabled
+      ? "Off. Push-to-talk still works"
+      : "Audio recording is paused"
+  }
+
   /// Computed status text for notifications
   private var notificationStatusText: String {
     if !appState.hasNotificationPermission {
@@ -610,14 +627,14 @@ struct SettingsContentView: View {
             .foregroundColor(OmiColors.purplePrimary)
 
           VStack(alignment: .leading, spacing: 4) {
-            Text("Audio Recording")
+            Text(audioRecordingTitle)
               .scaledFont(size: 16, weight: .semibold)
               .foregroundColor(OmiColors.textPrimary)
 
             Text(
               transcriptionError
                 ?? (isTranscribing
-                  ? "Recording and transcribing audio" : "Audio recording is paused")
+                  ? audioRecordingActiveDescription : audioRecordingPausedDescription)
             )
             .scaledFont(size: 13)
             .foregroundColor(transcriptionError != nil ? OmiColors.warning : OmiColors.textTertiary)
