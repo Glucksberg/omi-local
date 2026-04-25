@@ -43,6 +43,21 @@ class AppProvider: ObservableObject {
             NotificationCenter.default.post(name: .appsPageDidLoad, object: nil)
         }
 
+        if LocalMode.isEnabled {
+            apps = []
+            popularApps = []
+            integrationApps = []
+            chatApps = []
+            summaryApps = []
+            notificationApps = []
+            enabledApps = []
+            categories = []
+            capabilities = []
+            updateDerivedLists()
+            log("Apps: omi-local mode skipping vendor app catalog")
+            return
+        }
+
         do {
             // Fetch grouped apps and metadata in parallel
             async let v2AppsTask = apiClient.getAppsV2()
@@ -224,6 +239,13 @@ class AppProvider: ObservableObject {
 
     /// Fetch user's enabled apps
     func fetchEnabledApps() async {
+        if LocalMode.isEnabled {
+            enabledApps = []
+            chatApps = []
+            log("Apps: omi-local mode has no enabled vendor apps")
+            return
+        }
+
         do {
             enabledApps = try await apiClient.getEnabledApps()
             chatApps = enabledApps.filter { $0.worksWithChat }

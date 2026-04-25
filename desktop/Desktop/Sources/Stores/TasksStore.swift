@@ -207,6 +207,13 @@ class TasksStore: ObservableObject {
         // Only refresh if we've already loaded tasks
         guard hasLoadedIncomplete else { return }
 
+        if LocalMode.isEnabled {
+            await reloadFromLocalCache()
+            await loadDashboardTasks()
+            log("TasksStore: omi-local auto-refresh loaded from SQLite")
+            return
+        }
+
         // Silently sync and reload incomplete tasks (local-first, like Memories)
         do {
             let reloadLimit = max(pageSize, incompleteTasks.count)
@@ -337,6 +344,7 @@ class TasksStore: ObservableObject {
     /// local tasks not present. Throttled to run at most every 5 minutes.
     /// Catches cases where the user has more tasks than one page of auto-refresh can cover.
     private func reconcileWithAPIIfNeeded() async {
+        guard !LocalMode.isEnabled else { return }
         guard AuthService.shared.isSignedIn else { return }
 
         // Throttle: skip if last reconciliation was < 5 minutes ago
@@ -477,11 +485,13 @@ class TasksStore: ObservableObject {
         }
         // Kick off one-time full sync in background (populates SQLite with all tasks)
         // Then retry pushing any locally-created tasks that failed to sync
-        Task {
-            await performFullSyncIfNeeded()
-            await migrateAITasksToStagedIfNeeded()
-            await migrateConversationItemsToStagedIfNeeded()
-            await retryUnsyncedItems()
+        if !LocalMode.isEnabled {
+            Task {
+                await performFullSyncIfNeeded()
+                await migrateAITasksToStagedIfNeeded()
+                await migrateConversationItemsToStagedIfNeeded()
+                await retryUnsyncedItems()
+            }
         }
         // Backfill relevance scores for unscored tasks (independent of full sync)
         Task {
@@ -489,11 +499,13 @@ class TasksStore: ObservableObject {
             await backfillRelevanceScoresIfNeeded(userId: userId)
         }
         // Ensure minimum promoted tasks on startup — insert directly, no full reload
-        Task {
-            let promoted = await TaskPromotionService.shared.ensureMinimumOnStartup()
-            if !promoted.isEmpty {
-                self.incompleteTasks.append(contentsOf: promoted)
-                log("TasksStore: Inserted \(promoted.count) promoted tasks on startup")
+        if !LocalMode.isEnabled {
+            Task {
+                let promoted = await TaskPromotionService.shared.ensureMinimumOnStartup()
+                if !promoted.isEmpty {
+                    self.incompleteTasks.append(contentsOf: promoted)
+                    log("TasksStore: Inserted \(promoted.count) promoted tasks on startup")
+                }
             }
         }
     }
@@ -523,6 +535,16 @@ class TasksStore: ObservableObject {
             }
         } catch {
             log("TasksStore: Local cache unavailable for incomplete tasks, falling back to API")
+        }
+
+        if LocalMode.isEnabled {
+            hasLoadedIncomplete = true
+            incompleteOffset = incompleteTasks.count
+            hasMoreIncompleteTasks = incompleteTasks.count >= pageSize
+            isLoadingIncomplete = false
+            NotificationCenter.default.post(name: .tasksPageDidLoad, object: nil)
+            log("TasksStore: omi-local loaded \(incompleteTasks.count) incomplete tasks from SQLite")
+            return
         }
 
         // Step 2: Fetch from API, sync to cache, reload from cache
@@ -574,6 +596,7 @@ class TasksStore: ObservableObject {
     /// then hard-delete any local tasks that are absent. This catches tasks
     /// deleted on other devices (e.g. mobile) that still exist in local SQLite.
     private func forceReconcileOnLoad() async {
+        guard !LocalMode.isEnabled else { return }
         let batchSize = 500
         var allApiIds = Set<String>()
         var offset = 0
@@ -648,6 +671,16 @@ class TasksStore: ObservableObject {
             log("TasksStore: Local cache unavailable for completed tasks")
         }
 
+        if LocalMode.isEnabled {
+            hasLoadedCompleted = true
+            completedOffset = completedTasks.count
+            hasMoreCompletedTasks = completedTasks.count >= pageSize
+            isLoadingCompleted = false
+            NotificationCenter.default.post(name: .tasksPageDidLoad, object: nil)
+            log("TasksStore: omi-local loaded \(completedTasks.count) completed tasks from SQLite")
+            return
+        }
+
         // Step 2: Fetch from API and sync
         do {
             let response = try await APIClient.shared.getActionItems(
@@ -717,6 +750,16 @@ class TasksStore: ObservableObject {
             log("TasksStore: Local cache unavailable for deleted tasks")
         }
 
+        if LocalMode.isEnabled {
+            hasLoadedDeleted = true
+            deletedOffset = deletedTasks.count
+            hasMoreDeletedTasks = deletedTasks.count >= pageSize
+            isLoadingDeleted = false
+            NotificationCenter.default.post(name: .tasksPageDidLoad, object: nil)
+            log("TasksStore: omi-local loaded \(deletedTasks.count) deleted tasks from SQLite")
+            return
+        }
+
         // Step 2: Fetch from API and sync
         do {
             let response = try await APIClient.shared.getActionItems(
@@ -762,6 +805,7 @@ class TasksStore: ObservableObject {
     /// One-time background sync that fetches ALL tasks from the API and stores in SQLite.
     /// Ensures filter/search queries have the full dataset. Keyed per user so it runs once per account.
     private func performFullSyncIfNeeded() async {
+        guard !LocalMode.isEnabled else { return }
         let userId = UserDefaults.standard.string(forKey: "auth_userId") ?? "unknown"
         let syncKey = "tasksFullSyncCompleted_v9_\(userId)"
 
@@ -853,6 +897,7 @@ class TasksStore: ObservableObject {
     /// The SQLite migration handles local data; this handles Firestore.
     /// Sets the flag optimistically before the request to avoid retry loops on timeout.
     private func migrateAITasksToStagedIfNeeded() async {
+        guard !LocalMode.isEnabled else { return }
         let userId = UserDefaults.standard.string(forKey: "auth_userId") ?? "unknown"
         let migrationKey = "stagedTasksMigrationCompleted_v4_\(userId)"
 
@@ -886,6 +931,7 @@ class TasksStore: ObservableObject {
     /// One-time migration of conversation-extracted action items (no source field) to staged_tasks.
     /// These were created by the old save_action_items path that bypassed the staging pipeline.
     private func migrateConversationItemsToStagedIfNeeded() async {
+        guard !LocalMode.isEnabled else { return }
         let userId = UserDefaults.standard.string(forKey: "auth_userId") ?? "unknown"
         let migrationKey = "conversationItemsMigrationCompleted_v4_\(userId)"
 
@@ -913,6 +959,7 @@ class TasksStore: ObservableObject {
     /// These are records with backendSynced=false and no backendId — the API call
     /// failed during extraction and there was no retry mechanism.
     func retryUnsyncedItems(includeRecent: Bool = false) async {
+        guard !LocalMode.isEnabled else { return }
         guard !isRetryingUnsynced else {
             log("TasksStore: Skipping retryUnsyncedItems (already in progress)")
             return

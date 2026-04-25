@@ -59,6 +59,12 @@ class DashboardViewModel: ObservableObject {
     }
 
     private func loadScores() async {
+        if LocalMode.isEnabled {
+            scoreResponse = nil
+            log("Dashboard: omi-local mode skipping remote scores")
+            return
+        }
+
         do {
             scoreResponse = try await APIClient.shared.getScores()
         } catch {

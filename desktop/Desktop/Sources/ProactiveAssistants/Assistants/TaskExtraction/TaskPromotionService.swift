@@ -47,6 +47,11 @@ actor TaskPromotionService {
     /// Returns the list of promoted tasks so callers can insert them directly.
     @discardableResult
     func promoteIfNeeded(shouldNotify: Bool = true) async -> [TaskActionItem] {
+        if LocalMode.isEnabled {
+            log("TaskPromotion: omi-local mode skipping backend promotion")
+            return []
+        }
+
         guard !isPromoting else {
             log("TaskPromotion: Already promoting, skipping")
             return []

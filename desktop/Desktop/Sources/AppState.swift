@@ -2026,6 +2026,25 @@ class AppState: ObservableObject {
   func refreshConversations() async {
     // Skip if user is signed out (tokens are cleared)
     guard AuthState.shared.isSignedIn else { return }
+    if LocalMode.isEnabled {
+      do {
+        let localConversations = try await TranscriptionStorage.shared.getLocalConversations(
+          limit: max(50, conversations.count),
+          starredOnly: showStarredOnly,
+          folderId: selectedFolderId
+        )
+        if localConversations != conversations {
+          conversations = localConversations
+        }
+        totalConversationsCount = try await TranscriptionStorage.shared.getLocalConversationsCount(
+          starredOnly: showStarredOnly
+        )
+        log("Conversations: omi-local auto-refresh loaded \(localConversations.count) from SQLite")
+      } catch {
+        logError("Conversations: omi-local auto-refresh failed", error: error)
+      }
+      return
+    }
     // Skip if in auth backoff period (recent 401 errors)
     guard !AuthBackoffTracker.shared.shouldSkipRequest() else { return }
     // Skip if currently doing a full load
@@ -2166,6 +2185,13 @@ class AppState: ObservableObject {
     guard !isLoadingFolders else { return }
 
     isLoadingFolders = true
+    if LocalMode.isEnabled {
+      folders = []
+      selectedFolderId = nil
+      isLoadingFolders = false
+      log("Folders: omi-local mode uses no remote folders")
+      return
+    }
 
     do {
       let fetchedFolders = try await APIClient.shared.getFolders()
