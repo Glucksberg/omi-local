@@ -53,10 +53,13 @@ set_env_line() {
 
 set_env_line OMI_LOCAL_TRANSCRIPTION_URL "http://127.0.0.1:10202"
 set_env_line OMI_LOCAL_TRANSCRIPTION_ENABLED "1"
+set_env_line OMI_LOCAL_DEFAULT_TRANSCRIPTION_LANGUAGE "auto"
 set_env_line OMI_LOCAL_TTS_URL "http://127.0.0.1:10202"
 set_env_line OMI_LOCAL_TTS_ENABLED "1"
+set_env_line OMI_LOCAL_STT_MAX_CONCURRENCY "1"
 set_env_line WHISPER_CPP_BIN "$WHISPER_BIN"
 set_env_line WHISPER_MODEL_PATH "$MODEL_PATH"
+set_env_line WHISPER_EXTRA_ARGS "--prompt Omi. Omi Local. Portuguese and English."
 
 echo "Local speech setup complete."
 echo "Model: $MODEL_PATH"

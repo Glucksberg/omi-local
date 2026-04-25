@@ -6,7 +6,8 @@ wide network bind.
 
 - STT: `whisper.cpp` through `/v2/voice-message/transcribe`,
   `/v2/voice-message/transcribe-stream`, and `/v4/listen`.
-- TTS: macOS `say` through `/v1/tts/synthesize`.
+- TTS: macOS `say` by default, or optional Kokoro-ONNX through
+  `/v1/tts/synthesize`.
 - Observability: `/health` reports model metadata, concurrency config, request
   counts, in-flight work, last duration, and last error.
 - Warmup: `POST /warmup` runs a tiny silent transcription to warm the OS file
@@ -24,6 +25,8 @@ Benchmark the current setup:
 
 ```bash
 ./scripts/benchmark-local-speech.sh
+./scripts/benchmark-local-stt-models.sh
+./scripts/benchmark-local-tts.sh
 ```
 
 Run persistently as a user LaunchAgent:
@@ -34,8 +37,25 @@ Run persistently as a user LaunchAgent:
 
 The setup script installs Python dependencies into `local-speech/.venv`,
 installs `whisper-cpp` with Homebrew if needed, downloads a default
-`ggml-small.bin` model, and writes non-secret loopback settings to
-`~/.omi.env`.
+`ggml-small.bin` model, sets transcription language detection to `auto`, and
+writes non-secret loopback settings to `~/.omi.env`. It also sets a small
+Whisper initial prompt for `Omi`/`Omi Local`, because the local path does not use
+the cloud provider vocabulary API.
+
+Download another Whisper model without changing the active service:
+
+```bash
+./scripts/download-whisper-model.sh medium
+./scripts/benchmark-local-stt-models.sh small medium
+```
+
+Enable local neural TTS with Kokoro-ONNX:
+
+```bash
+./scripts/setup-local-kokoro.sh
+./scripts/install-local-speech-launch-agent.sh
+./scripts/benchmark-local-tts.sh
+```
 
 Useful overrides:
 
@@ -43,6 +63,7 @@ Useful overrides:
 WHISPER_MODEL_SIZE=base ./scripts/setup-local-speech.sh
 WHISPER_MODEL_PATH=/path/to/ggml-medium.bin ./scripts/run-local-speech.sh
 OMI_LOCAL_TTS_VOICE=Samantha ./scripts/run-local-speech.sh
+OMI_LOCAL_TTS_PROVIDER=kokoro ./scripts/run-local-speech.sh
 OMI_LOCAL_SPEECH_WARMUP_ON_START=1 ./scripts/run-local-speech.sh
 ```
 
@@ -69,6 +90,11 @@ Model starting points for this laptop:
 - `large`: possible for batch tests, not recommended as the default until STT is
   moved to a resident backend.
 
-TTS currently uses macOS `say`, so there is no local neural TTS model to load.
-Kokoro or Qwen TTS should be added later behind `/v1/tts/synthesize` after this
-baseline is stable.
+The service defaults to `language=auto`, and the desktop app sends `multi` when
+auto-detect is enabled. Both paths map to Whisper language auto-detection.
+
+TTS defaults to macOS `say`, so there is no neural TTS model to load in the
+baseline. When `OMI_LOCAL_TTS_PROVIDER=kokoro` is set, the first Kokoro request
+loads the ONNX session and voices file into the service process; the model stays
+resident until the service restarts. Start with the `int8` Kokoro model for this
+MacBook, then compare `fp16` only if voice quality is the limiting factor.

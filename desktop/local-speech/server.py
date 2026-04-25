@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import ipaddress
 import json
 import os
@@ -17,10 +18,21 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, Response
 
+try:
+  import numpy as np
+except ImportError:  # Optional Kokoro dependency.
+  np = None
+
+try:
+  from kokoro_onnx import Kokoro
+except ImportError:  # Optional Kokoro dependency.
+  Kokoro = None
+
 
 APP_NAME = "omi-local-speech"
 DEFAULT_SAMPLE_RATE = 16_000
 DEFAULT_CHANNELS = 1
+DEFAULT_TRANSCRIPTION_LANGUAGE = os.environ.get("OMI_LOCAL_DEFAULT_TRANSCRIPTION_LANGUAGE", "auto").strip() or "auto"
 MAX_AUDIO_BYTES = int(os.environ.get("OMI_LOCAL_SPEECH_MAX_AUDIO_BYTES", str(20 * 1024 * 1024)))
 MAX_TTS_CHARS = int(os.environ.get("OMI_LOCAL_SPEECH_MAX_TTS_CHARS", "4000"))
 REQUIRE_LOOPBACK = os.environ.get("OMI_LOCAL_SPEECH_REQUIRE_LOOPBACK", "1") != "0"
@@ -55,10 +67,14 @@ STT_MAX_CONCURRENCY = env_int("OMI_LOCAL_STT_MAX_CONCURRENCY", 1)
 TTS_MAX_CONCURRENCY = env_int("OMI_LOCAL_TTS_MAX_CONCURRENCY", 2)
 QUEUE_TIMEOUT_SECONDS = env_float("OMI_LOCAL_SPEECH_QUEUE_TIMEOUT_SECONDS", 10.0)
 WARMUP_ON_START = env_flag("OMI_LOCAL_SPEECH_WARMUP_ON_START")
+TTS_PROVIDER = os.environ.get("OMI_LOCAL_TTS_PROVIDER", "say").strip().lower() or "say"
 
 STT_SEMAPHORE = threading.BoundedSemaphore(STT_MAX_CONCURRENCY)
 TTS_SEMAPHORE = threading.BoundedSemaphore(TTS_MAX_CONCURRENCY)
 METRICS_LOCK = threading.Lock()
+KOKORO_LOCK = threading.Lock()
+KOKORO_ENGINE: Any | None = None
+KOKORO_ENGINE_KEY: tuple[str, str] | None = None
 METRICS: dict[str, dict[str, Any]] = {
   "stt": {
     "requests": 0,
@@ -128,6 +144,30 @@ def default_model_path() -> Path:
   )
 
 
+def default_kokoro_model_path() -> Path:
+  return (
+    Path.home()
+    / "Library"
+    / "Application Support"
+    / "Omi Local"
+    / "models"
+    / "kokoro"
+    / "kokoro-v1.0.int8.onnx"
+  )
+
+
+def default_kokoro_voices_path() -> Path:
+  return (
+    Path.home()
+    / "Library"
+    / "Application Support"
+    / "Omi Local"
+    / "models"
+    / "kokoro"
+    / "voices-v1.0.bin"
+  )
+
+
 def resolve_whisper_binary() -> str | None:
   configured = os.environ.get("WHISPER_CPP_BIN")
   if configured:
@@ -141,6 +181,14 @@ def resolve_whisper_binary() -> str | None:
 
 def resolve_whisper_model() -> Path:
   return Path(os.environ.get("WHISPER_MODEL_PATH", str(default_model_path()))).expanduser()
+
+
+def resolve_kokoro_model() -> Path:
+  return Path(os.environ.get("OMI_LOCAL_KOKORO_MODEL_PATH", str(default_kokoro_model_path()))).expanduser()
+
+
+def resolve_kokoro_voices() -> Path:
+  return Path(os.environ.get("OMI_LOCAL_KOKORO_VOICES_PATH", str(default_kokoro_voices_path()))).expanduser()
 
 
 def model_metadata(path: Path) -> dict[str, Any]:
@@ -185,12 +233,35 @@ def validate_audio_format(sample_rate: int, channels: int) -> None:
 
 def clean_whisper_text(text: str) -> str:
   lines: list[str] = []
+  empty_markers = {"[BLANK_AUDIO]", "[SILENCE]", "[NO_SPEECH]", "(BLANK_AUDIO)", "(SILENCE)"}
   for line in text.splitlines():
     stripped = line.strip()
     if not stripped:
       continue
+    if stripped.upper() in empty_markers:
+      continue
     lines.append(stripped)
   return " ".join(lines).strip()
+
+
+def payload_str(payload: dict[str, Any], key: str, env_name: str, default: str) -> str:
+  value = payload.get(key)
+  if value is None:
+    value = os.environ.get(env_name)
+  text = str(value if value is not None else default).strip()
+  return text or default
+
+
+def payload_float(payload: dict[str, Any], key: str, env_name: str, default: float) -> float:
+  value = payload.get(key)
+  if value is None:
+    value = os.environ.get(env_name)
+  if value is None:
+    return default
+  try:
+    return float(value)
+  except (TypeError, ValueError):
+    return default
 
 
 def mark_started(kind: str) -> None:
@@ -382,6 +453,71 @@ def run_say_tts(text: str) -> bytes:
     TTS_SEMAPHORE.release()
 
 
+def get_kokoro_engine() -> Any:
+  global KOKORO_ENGINE, KOKORO_ENGINE_KEY
+
+  if Kokoro is None or np is None:
+    raise HTTPException(
+      status_code=503,
+      detail="Kokoro dependencies are not installed. Run desktop/scripts/setup-local-kokoro.sh.",
+    )
+
+  model_path = resolve_kokoro_model()
+  voices_path = resolve_kokoro_voices()
+  if not model_path.exists():
+    raise HTTPException(status_code=503, detail=f"Kokoro model not found at {model_path}")
+  if not voices_path.exists():
+    raise HTTPException(status_code=503, detail=f"Kokoro voices not found at {voices_path}")
+
+  key = (str(model_path), str(voices_path))
+  with KOKORO_LOCK:
+    if KOKORO_ENGINE is None or KOKORO_ENGINE_KEY != key:
+      KOKORO_ENGINE = Kokoro(str(model_path), str(voices_path))
+      KOKORO_ENGINE_KEY = key
+    return KOKORO_ENGINE
+
+
+def wav_bytes_from_float_samples(samples: Any, sample_rate: int) -> bytes:
+  if np is None:
+    raise HTTPException(status_code=503, detail="numpy is required for Kokoro TTS")
+
+  audio = np.asarray(samples, dtype=np.float32).reshape(-1)
+  audio = np.clip(audio, -1.0, 1.0)
+  pcm = (audio * 32767.0).astype("<i2")
+
+  buffer = io.BytesIO()
+  with wave.open(buffer, "wb") as wav_file:
+    wav_file.setnchannels(1)
+    wav_file.setsampwidth(2)
+    wav_file.setframerate(sample_rate)
+    wav_file.writeframes(pcm.tobytes())
+  return buffer.getvalue()
+
+
+def run_kokoro_tts(text: str, payload: dict[str, Any]) -> bytes:
+  acquire_slot("tts", TTS_SEMAPHORE)
+  started_at = time.perf_counter()
+  mark_started("tts")
+  try:
+    voice = payload_str(payload, "voice", "OMI_LOCAL_KOKORO_VOICE", "af_heart")
+    lang = payload_str(payload, "lang", "OMI_LOCAL_KOKORO_LANG", "en-us")
+    speed = max(0.5, min(2.0, payload_float(payload, "speed", "OMI_LOCAL_KOKORO_SPEED", 1.0)))
+    engine = get_kokoro_engine()
+    samples, sample_rate = engine.create(text, voice=voice, speed=speed, lang=lang)
+    audio = wav_bytes_from_float_samples(samples, sample_rate)
+    mark_finished("tts", started_at)
+    return audio
+  except AssertionError as exc:
+    error = HTTPException(status_code=400, detail=str(exc))
+    mark_finished("tts", started_at, error)
+    raise error
+  except Exception as exc:
+    mark_finished("tts", started_at, exc)
+    raise
+  finally:
+    TTS_SEMAPHORE.release()
+
+
 def silent_audio(seconds: float = 0.25) -> bytes:
   frame_count = int(DEFAULT_SAMPLE_RATE * DEFAULT_CHANNELS * seconds)
   return b"\0\0" * frame_count
@@ -408,7 +544,7 @@ async def flush_websocket_audio(
     await websocket.send_text(json.dumps({"type": "error", "message": str(exc)}))
 
 
-async def run_warmup(language: str = "en") -> dict[str, Any]:
+async def run_warmup(language: str = DEFAULT_TRANSCRIPTION_LANGUAGE) -> dict[str, Any]:
   started_at = time.perf_counter()
   try:
     text = await asyncio.to_thread(
@@ -436,6 +572,8 @@ def health() -> dict[str, Any]:
   whisper_bin = resolve_whisper_binary()
   whisper_model = resolve_whisper_model()
   say_bin = shutil.which("say") or "/usr/bin/say"
+  kokoro_model = resolve_kokoro_model()
+  kokoro_voices = resolve_kokoro_voices()
   return {
     "ok": True,
     "service": APP_NAME,
@@ -448,6 +586,7 @@ def health() -> dict[str, Any]:
       "tts_max_concurrency": TTS_MAX_CONCURRENCY,
       "queue_timeout_seconds": QUEUE_TIMEOUT_SECONDS,
       "warmup_on_start": WARMUP_ON_START,
+      "default_transcription_language": DEFAULT_TRANSCRIPTION_LANGUAGE,
     },
     "stt": {
       "provider": "whisper.cpp",
@@ -457,9 +596,15 @@ def health() -> dict[str, Any]:
       "metrics": metrics_snapshot("stt"),
     },
     "tts": {
-      "provider": "macos-say",
+      "provider": TTS_PROVIDER,
       "binary": say_bin,
       "binary_exists": Path(say_bin).exists(),
+      "kokoro_dependencies_available": bool(Kokoro is not None and np is not None),
+      "kokoro_model": model_metadata(kokoro_model),
+      "kokoro_voices": model_metadata(kokoro_voices),
+      "kokoro_loaded": KOKORO_ENGINE is not None,
+      "kokoro_default_voice": os.environ.get("OMI_LOCAL_KOKORO_VOICE", "af_heart"),
+      "kokoro_default_lang": os.environ.get("OMI_LOCAL_KOKORO_LANG", "en-us"),
       "metrics": metrics_snapshot("tts"),
     },
     "warmup": metrics_snapshot("warmup"),
@@ -467,14 +612,14 @@ def health() -> dict[str, Any]:
 
 
 @app.post("/warmup")
-async def warmup(language: str = Query("en")) -> dict[str, Any]:
+async def warmup(language: str = Query(DEFAULT_TRANSCRIPTION_LANGUAGE)) -> dict[str, Any]:
   return await run_warmup(language=language)
 
 
 @app.post("/v2/voice-message/transcribe")
 async def transcribe_batch(
   request: Request,
-  language: str = Query("en"),
+  language: str = Query(DEFAULT_TRANSCRIPTION_LANGUAGE),
   sample_rate: int = Query(DEFAULT_SAMPLE_RATE),
   channels: int = Query(DEFAULT_CHANNELS),
 ) -> dict[str, str]:
@@ -486,7 +631,7 @@ async def transcribe_batch(
 @app.websocket("/v2/voice-message/transcribe-stream")
 async def transcribe_stream(
   websocket: WebSocket,
-  language: str = Query("en"),
+  language: str = Query(DEFAULT_TRANSCRIPTION_LANGUAGE),
   sample_rate: int = Query(DEFAULT_SAMPLE_RATE),
   channels: int = Query(DEFAULT_CHANNELS),
 ) -> None:
@@ -515,12 +660,16 @@ async def transcribe_stream(
           await websocket.send_text("ping")
   except WebSocketDisconnect:
     return
+  except RuntimeError as exc:
+    if "disconnect message" in str(exc):
+      return
+    raise
 
 
 @app.websocket("/v4/listen")
 async def listen_stream(
   websocket: WebSocket,
-  language: str = Query("en"),
+  language: str = Query(DEFAULT_TRANSCRIPTION_LANGUAGE),
   sample_rate: int = Query(DEFAULT_SAMPLE_RATE),
   channels: int = Query(DEFAULT_CHANNELS),
 ) -> None:
@@ -550,6 +699,10 @@ async def listen_stream(
           await websocket.send_text("ping")
   except WebSocketDisconnect:
     return
+  except RuntimeError as exc:
+    if "disconnect message" in str(exc):
+      return
+    raise
 
 
 @app.post("/v1/tts/synthesize")
@@ -560,5 +713,10 @@ async def synthesize_tts(request: Request) -> Response:
     raise HTTPException(status_code=400, detail="text is required")
   if len(text) > MAX_TTS_CHARS:
     raise HTTPException(status_code=413, detail="text is too long")
+  if TTS_PROVIDER == "kokoro":
+    audio = await asyncio.to_thread(run_kokoro_tts, text, payload)
+    return Response(content=audio, media_type="audio/wav")
+  if TTS_PROVIDER not in {"say", "macos-say"}:
+    raise HTTPException(status_code=503, detail=f"Unsupported TTS provider: {TTS_PROVIDER}")
   audio = await asyncio.to_thread(run_say_tts, text)
   return Response(content=audio, media_type="audio/aiff")

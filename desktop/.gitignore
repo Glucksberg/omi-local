@@ -48,6 +48,10 @@ scripts/*
 !scripts/run-local-speech.sh
 !scripts/install-local-speech-launch-agent.sh
 !scripts/benchmark-local-speech.sh
+!scripts/download-whisper-model.sh
+!scripts/setup-local-kokoro.sh
+!scripts/benchmark-local-stt-models.sh
+!scripts/benchmark-local-tts.sh
 
 # Swift compiler diagnostics cache
 *.dia
