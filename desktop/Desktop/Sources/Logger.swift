@@ -121,9 +121,11 @@ func logSync(_ message: String) {
   print(line)
   fflush(stdout)
 
-  let breadcrumb = Breadcrumb(level: .info, category: "app")
-  breadcrumb.message = message
-  SentrySDK.addBreadcrumb(breadcrumb)
+  if !LocalMode.isEnabled {
+    let breadcrumb = Breadcrumb(level: .info, category: "app")
+    breadcrumb.message = message
+    SentrySDK.addBreadcrumb(breadcrumb)
+  }
 
   appendToLogFileSync(line)
 }
@@ -135,10 +137,12 @@ func log(_ message: String) {
   print(line)
   fflush(stdout)
 
-  // Add breadcrumb to Sentry for context in crash reports (now enabled for dev builds too)
-  let breadcrumb = Breadcrumb(level: .info, category: "app")
-  breadcrumb.message = message
-  SentrySDK.addBreadcrumb(breadcrumb)
+  if !LocalMode.isEnabled {
+    // Add breadcrumb to Sentry for context in crash reports (now enabled for dev builds too)
+    let breadcrumb = Breadcrumb(level: .info, category: "app")
+    breadcrumb.message = message
+    SentrySDK.addBreadcrumb(breadcrumb)
+  }
 
   appendToLogFile(line)
 }
@@ -151,6 +155,11 @@ func logError(_ message: String, error: Error? = nil) {
   let line = "[\(timestamp)] [error] \(fullMessage)"
   print(line)
   fflush(stdout)
+
+  if LocalMode.isEnabled {
+    appendToLogFile(line)
+    return
+  }
 
   // Add error breadcrumb and capture in Sentry (now enabled for dev builds too)
   let breadcrumb = Breadcrumb(level: .error, category: "error")

@@ -15,7 +15,7 @@ import { writeFile, unlink } from "node:fs/promises";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join as pathJoin } from "node:path";
-import {
+import omiProvider, {
   classifyBash,
   classifyFileWrite,
   inspectToolCall,
@@ -29,7 +29,7 @@ import {
   __omiPendingCallsForTest,
   __resetOmiPipeForTest,
 } from "./index.ts";
-import type { ToolCallEvent } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ToolCallEvent } from "@mariozechner/pi-coding-agent";
 
 // ---------------------------------------------------------------------------
 // classifyBash — allow-by-default for normal dev commands
@@ -755,6 +755,124 @@ test("appendAudit: fail-safe when audit path is unwritable", async () => {
       // best-effort cleanup
     }
   }
+});
+
+// ---------------------------------------------------------------------------
+// Extension entry point — provider registration
+// ---------------------------------------------------------------------------
+
+interface FakePi {
+  providers: Array<{ id: string; options: any }>;
+  handlers: Record<string, unknown[]>;
+  tools: unknown[];
+  api: ExtensionAPI;
+}
+
+function createFakePi(): FakePi {
+  const fake = {
+    providers: [],
+    handlers: {},
+    tools: [],
+  } as FakePi;
+
+  fake.api = {
+    registerProvider: (id: string, options: any): void => {
+      fake.providers.push({ id, options });
+    },
+    on: (event: string, handler: unknown): void => {
+      (fake.handlers[event] ??= []).push(handler);
+    },
+    registerTool: (tool: unknown): void => {
+      fake.tools.push(tool);
+    },
+  } as unknown as ExtensionAPI;
+
+  return fake;
+}
+
+function withPatchedEnv<T>(updates: Record<string, string | undefined>, fn: () => T): T {
+  const originals = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(updates)) {
+    originals.set(key, process.env[key]);
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+
+  try {
+    return fn();
+  } finally {
+    for (const [key, value] of originals) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
+function captureStderr(fn: () => void): string[] {
+  const originalWrite = process.stderr.write.bind(process.stderr);
+  const calls: string[] = [];
+  (process.stderr as unknown as { write: (chunk: unknown) => boolean }).write =
+    (chunk: unknown) => {
+      calls.push(String(chunk));
+      return true;
+    };
+
+  try {
+    fn();
+  } finally {
+    (process.stderr as unknown as { write: typeof originalWrite }).write =
+      originalWrite;
+  }
+  return calls;
+}
+
+test("omiProvider: skips custom omi provider when OMI_API_KEY is absent", () => {
+  const fake = createFakePi();
+
+  const stderr = captureStderr(() => {
+    withPatchedEnv(
+      {
+        OMI_API_KEY: undefined,
+        OMI_BRIDGE_PIPE: undefined,
+      },
+      () => omiProvider(fake.api),
+    );
+  });
+
+  assert.equal(fake.providers.length, 0);
+  assert.equal(fake.handlers.tool_call?.length, 1);
+  assert.equal(fake.handlers.tool_result?.length, 1);
+  assert.match(stderr.join(""), /skipping omi provider registration/);
+});
+
+test("omiProvider: registers custom omi provider when OMI_API_KEY is present", () => {
+  const fake = createFakePi();
+
+  captureStderr(() => {
+    withPatchedEnv(
+      {
+        OMI_API_BASE_URL: "http://127.0.0.1:10201/v2",
+        OMI_API_KEY: "test-token",
+        OMI_BRIDGE_PIPE: undefined,
+      },
+      () => omiProvider(fake.api),
+    );
+  });
+
+  assert.equal(fake.providers.length, 1);
+  assert.equal(fake.providers[0].id, "omi");
+  assert.equal(fake.providers[0].options.apiKey, "test-token");
+  assert.equal(fake.providers[0].options.baseUrl, "http://127.0.0.1:10201/v2");
+  assert.deepEqual(
+    fake.providers[0].options.models.map((model: { id: string }) => model.id),
+    ["omi-sonnet", "omi-opus"],
+  );
 });
 
 // ---------------------------------------------------------------------------

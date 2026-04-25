@@ -170,6 +170,50 @@ actor GoalStorage {
         return inserted
     }
 
+    /// Create a fully-local goal for omi-local mode. The synthetic backendId keeps
+    /// existing UI code paths working without queueing network sync retries.
+    @discardableResult
+    func createLocalGoal(
+        title: String,
+        description: String? = nil,
+        goalType: GoalType = .boolean,
+        targetValue: Double = 1.0,
+        currentValue: Double = 0.0,
+        minValue: Double = 0.0,
+        maxValue: Double = 100.0,
+        unit: String? = nil
+    ) async throws -> Goal {
+        let db = try await ensureInitialized()
+        let now = Date()
+        let localBackendId = "local_\(UUID().uuidString.lowercased())"
+
+        let inserted = try await db.write { database in
+            try GoalRecord(
+                backendId: localBackendId,
+                backendSynced: true,
+                title: title,
+                goalDescription: description,
+                goalType: goalType.rawValue,
+                targetValue: targetValue,
+                currentValue: currentValue,
+                minValue: minValue,
+                maxValue: maxValue,
+                unit: unit,
+                isActive: true,
+                completedAt: nil,
+                deleted: false,
+                createdAt: now,
+                updatedAt: now
+            ).inserted(database)
+        }
+
+        guard let goal = inserted.toGoal() else {
+            throw GoalStorageError.syncFailed("Created local goal could not be converted")
+        }
+        log("GoalStorage: Created local goal '\(title)' (id: \(goal.id))")
+        return goal
+    }
+
     /// Mark a local goal as synced with backend ID
     func markSynced(id: Int64, backendId: String) async throws {
         let db = try await ensureInitialized()
@@ -204,19 +248,48 @@ actor GoalStorage {
     // MARK: - Update Operations
 
     /// Update progress for a goal by backendId
-    func updateProgress(backendId: String, currentValue: Double) async throws {
+    @discardableResult
+    func updateProgress(backendId: String, currentValue: Double) async throws -> Goal {
         let db = try await ensureInitialized()
 
-        try await db.write { database in
-            guard var record = try GoalRecord
-                .filter(Column("backendId") == backendId)
-                .fetchOne(database) else {
+        return try await db.write { database in
+            guard var record = try Self.fetchRecord(database, backendId: backendId) else {
                 throw GoalStorageError.recordNotFound
             }
 
             record.currentValue = currentValue
             record.updatedAt = Date()
             try record.update(database)
+            guard let goal = record.toGoal() else {
+                throw GoalStorageError.syncFailed("Updated goal could not be converted")
+            }
+            return goal
+        }
+    }
+
+    @discardableResult
+    func updateGoal(
+        backendId: String,
+        title: String,
+        currentValue: Double,
+        targetValue: Double
+    ) async throws -> Goal {
+        let db = try await ensureInitialized()
+
+        return try await db.write { database in
+            guard var record = try Self.fetchRecord(database, backendId: backendId) else {
+                throw GoalStorageError.recordNotFound
+            }
+
+            record.title = title
+            record.currentValue = currentValue
+            record.targetValue = targetValue
+            record.updatedAt = Date()
+            try record.update(database)
+            guard let goal = record.toGoal() else {
+                throw GoalStorageError.syncFailed("Updated goal could not be converted")
+            }
+            return goal
         }
     }
 
@@ -225,9 +298,7 @@ actor GoalStorage {
         let db = try await ensureInitialized()
 
         try await db.write { database in
-            guard var record = try GoalRecord
-                .filter(Column("backendId") == backendId)
-                .fetchOne(database) else {
+            guard var record = try Self.fetchRecord(database, backendId: backendId) else {
                 throw GoalStorageError.recordNotFound
             }
 
@@ -240,13 +311,12 @@ actor GoalStorage {
     }
 
     /// Mark a goal as completed by backendId
-    func markCompleted(backendId: String) async throws {
+    @discardableResult
+    func markCompleted(backendId: String) async throws -> Goal {
         let db = try await ensureInitialized()
 
-        try await db.write { database in
-            guard var record = try GoalRecord
-                .filter(Column("backendId") == backendId)
-                .fetchOne(database) else {
+        let goal = try await db.write { database in
+            guard var record = try Self.fetchRecord(database, backendId: backendId) else {
                 throw GoalStorageError.recordNotFound
             }
 
@@ -254,8 +324,28 @@ actor GoalStorage {
             record.completedAt = Date()
             record.updatedAt = Date()
             try record.update(database)
+            guard let goal = record.toGoal() else {
+                throw GoalStorageError.syncFailed("Completed goal could not be converted")
+            }
+            return goal
         }
 
         log("GoalStorage: Marked goal completed (backendId: \(backendId))")
+        return goal
+    }
+
+    private static func fetchRecord(_ database: Database, backendId: String) throws -> GoalRecord? {
+        if let record = try GoalRecord
+            .filter(Column("backendId") == backendId)
+            .fetchOne(database) {
+            return record
+        }
+
+        guard backendId.hasPrefix("local_"),
+              let localRowId = Int64(backendId.dropFirst("local_".count))
+        else {
+            return nil
+        }
+        return try GoalRecord.fetchOne(database, key: localRowId)
     }
 }

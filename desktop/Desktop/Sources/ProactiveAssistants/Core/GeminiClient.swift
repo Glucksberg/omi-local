@@ -164,6 +164,9 @@ actor GeminiClient {
 
   /// Backend proxy base URL (from OMI_API_URL env var)
   private static var proxyBaseURL: String {
+    if LocalMode.isEnabled {
+      return LocalMode.localAIProxyURL ?? ""
+    }
     if let cString = getenv("OMI_API_URL"), let url = String(validatingUTF8: cString), !url.isEmpty {
       return url.hasSuffix("/") ? url : url + "/"
     }
@@ -172,6 +175,7 @@ actor GeminiClient {
 
   enum GeminiClientError: LocalizedError {
     case missingAPIKey
+    case localProviderUnavailable
     case networkError(Error)
     case invalidResponse
     case apiError(String)
@@ -186,6 +190,8 @@ actor GeminiClient {
       switch self {
       case .missingAPIKey:
         return "AI features are not configured. Please update the app."
+      case .localProviderUnavailable:
+        return "Local AI is not configured. Set OMI_LOCAL_AI_PROXY_URL or OMI_LOCAL_AI_ENABLED=1."
       case .networkError:
         return "Could not reach AI service. Check your internet connection and try again."
       case .invalidResponse:
@@ -227,6 +233,9 @@ actor GeminiClient {
   }
 
   init(apiKey: String? = nil, model: String = ModelQoS.Gemini.proactive) throws {
+    if LocalMode.isEnabled && Self.proxyBaseURL.isEmpty {
+      throw GeminiClientError.localProviderUnavailable
+    }
     // BREAKING CHANGE (issue #5861): apiKey parameter is ignored.
     // All Gemini requests now route through the backend proxy which supplies
     // the key server-side. Requires OMI_API_URL to be set (standard dev flow via run.sh).
@@ -306,7 +315,7 @@ actor GeminiClient {
           || lower.contains("internal error")
       case .networkError:
         return true
-      case .invalidResponse, .missingAPIKey:
+      case .invalidResponse, .missingAPIKey, .localProviderUnavailable:
         return false
       }
     }

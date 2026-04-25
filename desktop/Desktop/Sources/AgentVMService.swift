@@ -10,6 +10,10 @@ actor AgentVMService {
     /// Check backend for existing VM — if none exists, run the full pipeline.
     /// Call this on every app launch for signed-in users.
     func ensureProvisioned() {
+        guard !LocalMode.isEnabled else {
+            log("AgentVMService: disabled in omi-local mode")
+            return
+        }
         guard !isRunning else {
             log("AgentVMService: Pipeline already running, skipping")
             return
@@ -58,6 +62,10 @@ actor AgentVMService {
     /// Kick off the full VM setup pipeline: provision → poll status → upload DB.
     /// Safe to call multiple times — only one pipeline runs at a time.
     func startPipeline() {
+        guard !LocalMode.isEnabled else {
+            log("AgentVMService: provisioning skipped in omi-local mode")
+            return
+        }
         guard !isRunning else {
             log("AgentVMService: Pipeline already running, skipping")
             return

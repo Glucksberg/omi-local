@@ -10,6 +10,13 @@
 - Never ask for confirmation. Just act. Make decisions autonomously and proceed without checking in.
 - You have full access to the user's computer — browser, desktop, all apps. Never ask the user to do something you can do yourself (sign in, click buttons, dismiss dialogs, etc.).
 
+## Engineering Principles
+
+- **Think before coding** — read the relevant code paths, identify the real constraint, and choose the smallest coherent design before editing. Do not start by guessing or broad refactoring.
+- **Simplicity first** — prefer direct, boring implementations that fit the existing architecture. Add abstractions only when they remove real complexity or protect a boundary we actually need.
+- **Surgical changes** — keep edits narrow, preserve upstream shape, and avoid churn that makes forks harder to sync. When local-only behavior is required, isolate it behind explicit flags or adapters.
+- **Goal-driven execution** — optimize for the user-visible outcome. Verify the path that matters, document residual risk, and stop once the goal is met rather than expanding scope opportunistically.
+
 ## Setup
 
 ### Pre-commit Hook (required)

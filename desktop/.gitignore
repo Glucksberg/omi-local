@@ -42,7 +42,11 @@ xcuserdata/
 
 # Local scripts and data (untracked)
 local/
-scripts/
+scripts/*
+!scripts/login-openai-codex.mjs
+!scripts/setup-local-speech.sh
+!scripts/run-local-speech.sh
+!scripts/install-local-speech-launch-agent.sh
 
 # Swift compiler diagnostics cache
 *.dia

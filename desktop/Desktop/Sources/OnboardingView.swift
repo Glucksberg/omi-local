@@ -436,6 +436,16 @@ struct OnboardingView: View {
           },
           onForceComplete: handleOnboardingComplete
         )
+      } else if currentStep == 17 && LocalMode.isEnabled {
+        Color.clear
+          .onAppear {
+            log("OnboardingView: Skipping BYOK step in omi-local mode")
+            AnalyticsManager.shared.onboardingStepCompleted(
+              step: 17,
+              stepName: "BYOK_LocalModeSkipped"
+            )
+            currentStep = 18
+          }
       } else if currentStep == 17 {
         OnboardingBYOKStepView(
           graphViewModel: graphViewModel,

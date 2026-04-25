@@ -58,6 +58,7 @@ class TranscriptionService {
         case invalidResponse
         case payloadTooLarge
         case webSocketError(String)
+        case localProviderUnavailable
 
         var errorDescription: String? {
             switch self {
@@ -71,6 +72,8 @@ class TranscriptionService {
                 return "Recording too long — keep it under 5 minutes"
             case .webSocketError(let message):
                 return "WebSocket error: \(message)"
+            case .localProviderUnavailable:
+                return "Local transcription is not configured. Set OMI_LOCAL_TRANSCRIPTION_URL or OMI_LOCAL_TRANSCRIPTION_ENABLED=1."
             }
         }
     }
@@ -103,6 +106,16 @@ class TranscriptionService {
     /// NOTE: Do NOT fall back to OMI_API_URL — that points to the Rust desktop-backend
     /// (Cloud Run), which does not have /v2/voice-message/* or /v4/listen endpoints.
     private static let pythonBackendBaseURL: String = {
+        if LocalMode.isEnabled {
+            if let cString = getenv("OMI_LOCAL_TRANSCRIPTION_URL"),
+               let url = String(validatingUTF8: cString), !url.isEmpty {
+                return url.hasSuffix("/") ? url : url + "/"
+            }
+            if let cString = getenv("OMI_PYTHON_API_URL"), let url = String(validatingUTF8: cString), !url.isEmpty {
+                return url.hasSuffix("/") ? url : url + "/"
+            }
+            return LocalMode.defaultLocalAPIURL
+        }
         if let cString = getenv("OMI_PYTHON_API_URL"), let url = String(validatingUTF8: cString), !url.isEmpty {
             return url.hasSuffix("/") ? url : url + "/"
         }
@@ -192,6 +205,11 @@ class TranscriptionService {
         onConnected: ConnectionHandler? = nil,
         onDisconnected: ConnectionHandler? = nil
     ) {
+        if LocalMode.isEnabled && !LocalMode.isTranscriptionEnabled {
+            log("TranscriptionService: omi-local has no local transcription provider configured")
+            onError?(TranscriptionError.localProviderUnavailable)
+            return
+        }
         self.onBackendSegments = onSegments
         self.onListenEvent = onEvent
         self.onError = onError
@@ -326,6 +344,13 @@ class TranscriptionService {
 
         guard let url = components.url else {
             onError?(TranscriptionError.connectionFailed(NSError(domain: "Invalid URL", code: -1)))
+            return
+        }
+
+        do {
+            try LocalNetworkPolicy.validate(url)
+        } catch {
+            onError?(TranscriptionError.connectionFailed(error))
             return
         }
 
@@ -543,6 +568,10 @@ extension TranscriptionService {
         language: String = "en",
         apiKey: String? = nil
     ) async throws -> String? {
+        if LocalMode.isEnabled && !LocalMode.isTranscriptionEnabled {
+            log("TranscriptionService: batch transcription skipped; local provider not configured")
+            throw TranscriptionError.localProviderUnavailable
+        }
         // Always use Firebase auth + Python backend
         let authService = await MainActor.run { AuthService.shared }
         let authHeader = try await authService.getAuthHeader()
@@ -561,6 +590,7 @@ extension TranscriptionService {
         guard let url = components.url else {
             throw TranscriptionError.connectionFailed(NSError(domain: "Invalid URL", code: -1))
         }
+        try LocalNetworkPolicy.validate(url)
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"

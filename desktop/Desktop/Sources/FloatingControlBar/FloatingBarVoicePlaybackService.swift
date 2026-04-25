@@ -147,6 +147,9 @@ final class FloatingBarVoicePlaybackService: NSObject, AVAudioPlayerDelegate {
   private func resolvePlaybackMode() -> PlaybackMode {
     // TTS is now proxied through the backend — no client-side API key needed.
     // Fall back to system voice only if the backend URL is not configured.
+    if LocalMode.isEnabled && !LocalMode.isTTSEnabled {
+      return .systemFallback
+    }
     guard getenv("OMI_API_URL") != nil else {
       return .systemFallback
     }

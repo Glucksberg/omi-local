@@ -9,6 +9,7 @@ class SettingsSyncManager {
 
     /// Pull settings from server and apply non-nil values to local singletons.
     func syncFromServer() async {
+        guard !LocalMode.isEnabled else { return }
         guard AuthService.shared.isSignedIn else { return }
         do {
             let remote = try await APIClient.shared.getAssistantSettings()
@@ -21,6 +22,7 @@ class SettingsSyncManager {
 
     /// Push all current local settings to the server.
     func syncToServer() async {
+        guard !LocalMode.isEnabled else { return }
         let settings = buildFromLocal()
         do {
             let _ = try await APIClient.shared.updateAssistantSettings(settings)
@@ -32,6 +34,7 @@ class SettingsSyncManager {
 
     /// Fire-and-forget partial update to server.
     func pushPartialUpdate(_ settings: AssistantSettingsResponse) {
+        guard !LocalMode.isEnabled else { return }
         Task {
             do {
                 let _ = try await APIClient.shared.updateAssistantSettings(settings)

@@ -13,6 +13,10 @@ export interface HarnessConfig {
   omiApiBaseUrl?: string;
   /** Firebase auth token for Omi API authentication */
   authToken?: string;
+  /** Explicit remote provider for omi-local mode, e.g. "openai-codex" */
+  remoteProvider?: string;
+  /** Explicit remote model for omi-local mode, e.g. "gpt-5.5" */
+  remoteModel?: string;
 }
 
 /**

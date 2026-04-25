@@ -132,7 +132,7 @@ class DashboardViewModel: ObservableObject {
         if let index = goals.firstIndex(where: { $0.id == goal.id }) {
             goals[index].currentValue = currentValue
         }
-        try? await GoalStorage.shared.updateProgress(backendId: goal.id, currentValue: currentValue)
+        _ = try? await GoalStorage.shared.updateProgress(backendId: goal.id, currentValue: currentValue)
 
         do {
             let updated = try await APIClient.shared.updateGoalProgress(

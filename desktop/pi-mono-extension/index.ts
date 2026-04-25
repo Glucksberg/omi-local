@@ -1,9 +1,9 @@
 // Omi Provider Extension for pi-mono
 //
 // Responsibilities:
-//   1. Register "omi" as an LLM provider using the OpenAI-compatible
-//      completions API. All inference routes through the Rust desktop-backend
-//      proxy for server-side cost tracking, model selection, and billing.
+//   1. Register "omi" as an LLM provider when OMI_API_KEY is present. The
+//      omi-local openai-codex path skips this provider and relies on pi's
+//      ChatGPT OAuth.
 //   2. Install a "tool_call" handler that denies a small set of clearly
 //      dangerous operations (privilege escalation, root-level deletes,
 //      pipe-to-shell, destructive git, etc.) so tool execution is seamless
@@ -730,32 +730,36 @@ export default function omiProvider(pi: ExtensionAPI): void {
   const baseUrl = process.env.OMI_API_BASE_URL || "https://api.omi.me/v2";
   const apiKey = process.env.OMI_API_KEY || "";
 
-  pi.registerProvider("omi", {
-    api: "openai-completions",
-    baseUrl,
-    apiKey,
-    models: [
-      {
-        id: "omi-sonnet",
-        name: "Omi Sonnet",
-        reasoning: true,
-        input: ["text", "image"],
-        contextWindow: 200_000,
-        maxTokens: 16_384,
-        // Cost set to 0 client-side — tracked server-side by the backend
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      },
-      {
-        id: "omi-opus",
-        name: "Omi Opus",
-        reasoning: true,
-        input: ["text", "image"],
-        contextWindow: 200_000,
-        maxTokens: 16_384,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      },
-    ],
-  });
+  if (apiKey) {
+    pi.registerProvider("omi", {
+      api: "openai-completions",
+      baseUrl,
+      apiKey,
+      models: [
+        {
+          id: "omi-sonnet",
+          name: "Omi Sonnet",
+          reasoning: true,
+          input: ["text", "image"],
+          contextWindow: 200_000,
+          maxTokens: 16_384,
+          // Cost set to 0 client-side — tracked server-side by the backend
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+        {
+          id: "omi-opus",
+          name: "Omi Opus",
+          reasoning: true,
+          input: ["text", "image"],
+          contextWindow: 200_000,
+          maxTokens: 16_384,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      ],
+    });
+  } else {
+    process.stderr.write("[omi-provider] OMI_API_KEY not set — skipping omi provider registration\n");
+  }
 
   pi.on("tool_call", async (event): Promise<ToolCallEventResult | void> => {
     let decision: DenyDecision | null = null;

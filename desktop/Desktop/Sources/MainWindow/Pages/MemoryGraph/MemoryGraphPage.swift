@@ -298,6 +298,10 @@ class MemoryGraphViewModel: ObservableObject {
       return response
     }
 
+    if LocalMode.isEnabled {
+      return response
+    }
+
     for attempt in 0..<4 {
       if AuthState.shared.isRestoringAuth {
         try? await Task.sleep(nanoseconds: 500_000_000)
@@ -327,6 +331,11 @@ class MemoryGraphViewModel: ObservableObject {
   func rebuildGraph() async {
     isRebuilding = true
     defer { isRebuilding = false }
+
+    if LocalMode.isEnabled {
+      await loadGraph()
+      return
+    }
 
     do {
       _ = try await APIClient.shared.rebuildKnowledgeGraph()

@@ -65,6 +65,10 @@ final class APIKeyService: ObservableObject {
 
     /// Start fetching keys in the background. Callers can await via waitForKeys().
     func startFetchingKeys() {
+        if LocalMode.isEnabled {
+            markLocalModeLoaded()
+            return
+        }
         fetchTask = Task { await self.fetchKeys() }
     }
 
@@ -72,6 +76,10 @@ final class APIKeyService: ObservableObject {
     /// If no fetch is in-flight, starts one (handles app-restart-while-signed-in case).
     func waitForKeys() async {
         if isLoaded { return }
+        if LocalMode.isEnabled {
+            markLocalModeLoaded()
+            return
+        }
         if fetchTask == nil {
             log("APIKeyService: waitForKeys called but no fetch in-flight, starting one")
             fetchTask = Task { await fetchKeys() }
@@ -93,6 +101,10 @@ final class APIKeyService: ObservableObject {
 
     /// Fetch keys from the backend. Call after Firebase auth is ready.
     func fetchKeys() async {
+        if LocalMode.isEnabled {
+            markLocalModeLoaded()
+            return
+        }
         loadError = nil
 
         // Retry up to 3 times with backoff
@@ -139,6 +151,13 @@ final class APIKeyService: ObservableObject {
         unsetenv("GOOGLE_CALENDAR_API_KEY")
     }
 
+    func markLocalModeLoaded() {
+        loadError = nil
+        isLoaded = true
+        applyToEnvironment()
+        log("APIKeyService: Local mode active; backend config fetch skipped")
+    }
+
     /// Push effective keys into the process environment for backward compatibility.
     private func applyToEnvironment() {
         if let key = effectiveGeminiKey {
@@ -169,7 +188,7 @@ final class APIKeyService: ObservableObject {
     /// True when the app has enough configuration to start transcription and screen analysis.
     /// In proxy mode (OMI_API_URL set), no client-side Deepgram/Gemini keys are needed.
     nonisolated static var keysAvailable: Bool {
-        getenv("GEMINI_API_KEY") != nil || getenv("OMI_API_URL") != nil
+        LocalMode.isEnabled || getenv("GEMINI_API_KEY") != nil || getenv("OMI_API_URL") != nil
     }
 
     private nonisolated static func nonEmptyStatic(_ s: String?) -> String? {

@@ -46,6 +46,17 @@ class AuthState: ObservableObject {
   @Published var userEmail: String?
 
   private init() {
+    if LocalMode.isEnabled {
+      UserDefaults.standard.set(true, forKey: Self.kAuthIsSignedIn)
+      UserDefaults.standard.set(LocalMode.email, forKey: Self.kAuthUserEmail)
+      UserDefaults.standard.set(LocalMode.userId, forKey: Self.kAuthUserId)
+      self.isSignedIn = true
+      self.userEmail = LocalMode.email
+      self.isRestoringAuth = false
+      NSLog("OMI AuthState: Initialized in local mode")
+      return
+    }
+
     // Restore auth state from UserDefaults immediately on init (before UI renders)
     let savedSignedIn = UserDefaults.standard.bool(forKey: Self.kAuthIsSignedIn)
     let savedEmail = UserDefaults.standard.string(forKey: Self.kAuthUserEmail)
@@ -233,6 +244,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     signal(SIGPIPE, SIG_IGN)
 
     DesktopAutomationBridge.shared.startIfNeeded()
+    LocalNetworkPolicy.installIfNeeded()
 
     // Strip com.apple.provenance xattrs that macOS adds when Sparkle extracts updates.
     // These break the code signature seal, causing the NEXT update to fail with
@@ -282,78 +294,90 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // This ensures notifications display properly when app is in foreground
     _ = NotificationService.shared
 
-    // Initialize Sparkle auto-updater early so the 10-minute check timer starts at launch
-    // Without this, the updater only starts when the user opens Settings or clicks "Check for Updates"
-    _ = UpdaterViewModel.shared
-    UpdaterViewModel.shared.checkForUpdatesImmediatelyAfterLaunchIfNeeded()
+    let localMode = LocalMode.isEnabled
 
-    // Initialize Sentry for crash reporting and error tracking (including dev builds)
-    let isDev = AnalyticsManager.isDevBuild
-    SentrySDK.start { options in
-      options.dsn =
-        "https://bbffa02d948c81ea4dccd36246c7bd20@o4511085999816704.ingest.us.sentry.io/4511086024851456"
-      options.debug = false
-      options.enableAutoSessionTracking = true
-      options.environment = isDev ? "development" : "production"
-      // Disable automatic HTTP client error capture — the SDK creates noisy events
-      // for every 4xx/5xx response (e.g. Cloud Run 503 cold starts on /v1/crisp/unread).
-      // App code already handles HTTP errors and reports meaningful ones explicitly.
-      options.enableCaptureFailedRequests = false
-      options.maxBreadcrumbs = 100
-      options.beforeSend = { event in
-        // Allow user feedback through from all builds (dev + prod)
-        if event.message?.formatted.hasPrefix("User Report") == true { return event }
-        // Never send other events from dev builds — they pollute production Sentry data
-        if isDev { return nil }
-        // Filter out HTTP errors targeting dev/local URLs — noise when tunnels or local backends are down
-        if let urlTag = event.tags?["url"],
-          urlTag.contains("localhost") || urlTag.contains("127.0.0.1")
-            || urlTag.contains("trycloudflare.com")
-        {
-          return nil
-        }
-        // Filter out NSURLErrorCancelled (-999) — these are intentional cancellations
-        // (e.g. proactive assistants cancelling in-flight Gemini requests on context switch)
-        if let exceptions = event.exceptions,
-          exceptions.contains(where: { exc in
-            let value = exc.value ?? ""
-            return exc.type == "NSURLErrorDomain" && (
-              value.contains("Code=-999") || value.contains("Code: -999")
-            )
-          })
-        {
-          return nil
-        }
-        // Filter out AuthError.notSignedIn — this is thrown when token refresh transiently
-        // fails (network blip, expired token mid-refresh). The user is still signed in per
-        // UserDefaults; the 30s refresh timer will retry. Not actionable as a Sentry error.
-        if let exceptions = event.exceptions,
-          exceptions.contains(where: { exc in
-            exc.type == "Omi_Computer.AuthError" && (exc.value ?? "").contains("notSignedIn")
-          })
-        {
-          return nil
-        }
-        return event
-      }
-    }
-    log("Sentry initialized (environment: \(isDev ? "development" : "production"))")
-
-    // Initialize Firebase
-    let plistPath = Bundle.main.path(forResource: "GoogleService-Info", ofType: "plist")
-
-    if let path = plistPath,
-      let options = FirebaseOptions(contentsOfFile: path)
-    {
-      FirebaseApp.configure(options: options)
+    if localMode {
+      log("Sparkle updater disabled in local mode")
+      log("Sentry disabled in local mode")
       AuthService.shared.configure()
+    } else {
+      // Initialize Sparkle auto-updater early so the 10-minute check timer starts at launch
+      // Without this, the updater only starts when the user opens Settings or clicks "Check for Updates"
+      _ = UpdaterViewModel.shared
+      UpdaterViewModel.shared.checkForUpdatesImmediatelyAfterLaunchIfNeeded()
+
+      // Initialize Sentry for crash reporting and error tracking (including dev builds)
+      let isDev = AnalyticsManager.isDevBuild
+      SentrySDK.start { options in
+        options.dsn =
+          "https://bbffa02d948c81ea4dccd36246c7bd20@o4511085999816704.ingest.us.sentry.io/4511086024851456"
+        options.debug = false
+        options.enableAutoSessionTracking = true
+        options.environment = isDev ? "development" : "production"
+        // Disable automatic HTTP client error capture — the SDK creates noisy events
+        // for every 4xx/5xx response (e.g. Cloud Run 503 cold starts on /v1/crisp/unread).
+        // App code already handles HTTP errors and reports meaningful ones explicitly.
+        options.enableCaptureFailedRequests = false
+        options.maxBreadcrumbs = 100
+        options.beforeSend = { event in
+          // Allow user feedback through from all builds (dev + prod)
+          if event.message?.formatted.hasPrefix("User Report") == true { return event }
+          // Never send other events from dev builds — they pollute production Sentry data
+          if isDev { return nil }
+          // Filter out HTTP errors targeting dev/local URLs — noise when tunnels or local backends are down
+          if let urlTag = event.tags?["url"],
+            urlTag.contains("localhost") || urlTag.contains("127.0.0.1")
+              || urlTag.contains("trycloudflare.com")
+          {
+            return nil
+          }
+          // Filter out NSURLErrorCancelled (-999) — these are intentional cancellations
+          // (e.g. proactive assistants cancelling in-flight Gemini requests on context switch)
+          if let exceptions = event.exceptions,
+            exceptions.contains(where: { exc in
+              let value = exc.value ?? ""
+              return exc.type == "NSURLErrorDomain" && (
+                value.contains("Code=-999") || value.contains("Code: -999")
+              )
+            })
+          {
+            return nil
+          }
+          // Filter out AuthError.notSignedIn — this is thrown when token refresh transiently
+          // fails (network blip, expired token mid-refresh). The user is still signed in per
+          // UserDefaults; the 30s refresh timer will retry. Not actionable as a Sentry error.
+          if let exceptions = event.exceptions,
+            exceptions.contains(where: { exc in
+              exc.type == "Omi_Computer.AuthError" && (exc.value ?? "").contains("notSignedIn")
+            })
+          {
+            return nil
+          }
+          return event
+        }
+      }
+      log("Sentry initialized (environment: \(isDev ? "development" : "production"))")
+
+      // Initialize Firebase
+      let plistPath = Bundle.main.path(forResource: "GoogleService-Info", ofType: "plist")
+
+      if let path = plistPath,
+        let options = FirebaseOptions(contentsOfFile: path)
+      {
+        FirebaseApp.configure(options: options)
+        AuthService.shared.configure()
+      }
     }
 
     // Initialize analytics (MixPanel + PostHog)
-    AnalyticsManager.shared.initialize()
-    AnalyticsManager.shared.detectAndReportCrash()
-    AnalyticsManager.shared.appLaunched()
-    AnalyticsManager.shared.trackDisplayInfo()
+    if localMode {
+      log("Analytics disabled in local mode")
+    } else {
+      AnalyticsManager.shared.initialize()
+      AnalyticsManager.shared.detectAndReportCrash()
+      AnalyticsManager.shared.appLaunched()
+      AnalyticsManager.shared.trackDisplayInfo()
+    }
 
     // Tier gating: migrate old boolean key to new 6-tier system
     TierManager.migrateExistingUsersIfNeeded()
@@ -372,7 +396,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // Set per-user database path before any async tasks can trigger DB initialization.
     // This is synchronous and must happen before TierManager / TranscriptionRetryService.
-    let userId = UserDefaults.standard.string(forKey: "auth_userId")
+    let userId = localMode ? LocalMode.userId : UserDefaults.standard.string(forKey: "auth_userId")
     RewindDatabase.currentUserId = (userId?.isEmpty == false) ? userId : "anonymous"
 
     // Start resource monitoring (memory, CPU, disk)
@@ -389,31 +413,36 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // Identify user if already signed in
     if AuthState.shared.isSignedIn {
-      AnalyticsManager.shared.identify()
-      // Set Sentry user context (now enabled for dev builds too)
-      if let email = AuthState.shared.userEmail {
-        let sentryUser = Sentry.User()
-        sentryUser.email = email
-        sentryUser.username =
-          AuthService.shared.displayName.isEmpty ? nil : AuthService.shared.displayName
-        SentrySDK.setUser(sentryUser)
+      if localMode {
+        APIKeyService.shared.markLocalModeLoaded()
+        log("Local mode signed in as \(LocalMode.userId); startup network sync skipped")
+      } else {
+        AnalyticsManager.shared.identify()
+        // Set Sentry user context (now enabled for dev builds too)
+        if let email = AuthState.shared.userEmail {
+          let sentryUser = Sentry.User()
+          sentryUser.email = email
+          sentryUser.username =
+            AuthService.shared.displayName.isEmpty ? nil : AuthService.shared.displayName
+          SentrySDK.setUser(sentryUser)
+        }
+        // Fetch conversations on startup
+        AuthService.shared.fetchConversations()
+
+        // Fetch API keys from backend (keys are not bundled in the app)
+        APIKeyService.shared.startFetchingKeys()
+
+        // Fetch subscription plan for floating bar usage limits
+        Task { await FloatingBarUsageLimiter.shared.fetchPlan() }
+
+        // Check tier eligibility (at most once per day)
+        Task {
+          await TierManager.shared.checkTierIfNeeded()
+        }
+
+        // Report comprehensive settings state (at most once per day)
+        AnalyticsManager.shared.reportAllSettingsIfNeeded()
       }
-      // Fetch conversations on startup
-      AuthService.shared.fetchConversations()
-
-      // Fetch API keys from backend (keys are not bundled in the app)
-      APIKeyService.shared.startFetchingKeys()
-
-      // Fetch subscription plan for floating bar usage limits
-      Task { await FloatingBarUsageLimiter.shared.fetchPlan() }
-
-      // Check tier eligibility (at most once per day)
-      Task {
-        await TierManager.shared.checkTierIfNeeded()
-      }
-
-      // Report comprehensive settings state (at most once per day)
-      AnalyticsManager.shared.reportAllSettingsIfNeeded()
 
       // File indexing now runs through FileIndexingView UI (user consent required)
       // No background scan — prevents race condition where scan finishes before UI listens
@@ -482,7 +511,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     // Start Sentry heartbeat timer (every 5 minutes) to capture breadcrumbs periodically
-    startSentryHeartbeat()
+    if !localMode {
+      startSentryHeartbeat()
+    }
 
     // Activate app and show main window after a brief delay
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
@@ -511,6 +542,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   /// Start a timer that sends Sentry session snapshots every 5 minutes
   /// This ensures we have breadcrumbs captured even without errors
   private func startSentryHeartbeat() {
+    guard !LocalMode.isEnabled else { return }
     // Now runs in dev builds too since Sentry is always initialized
     sentryHeartbeatTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
       // Capture a session heartbeat event with current breadcrumbs
@@ -1111,10 +1143,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     ResourceMonitor.shared.reportResourcesNow(context: "app_terminating")
     ResourceMonitor.shared.stop()
 
-    // Capture final session snapshot before termination (now enabled for dev builds too)
-    SentrySDK.capture(message: "App Terminating") { scope in
-      scope.setLevel(.info)
-      scope.setTag(value: "lifecycle", key: "event_type")
+    if !LocalMode.isEnabled {
+      // Capture final session snapshot before termination (now enabled for dev builds too)
+      SentrySDK.capture(message: "App Terminating") { scope in
+        scope.setLevel(.info)
+        scope.setTag(value: "lifecycle", key: "event_type")
+      }
     }
   }
 

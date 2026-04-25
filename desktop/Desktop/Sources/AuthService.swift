@@ -129,6 +129,10 @@ class AuthService {
     func configure() {
         guard !isConfigured else { return }
         isConfigured = true
+        if LocalMode.isEnabled {
+            configureLocalMode()
+            return
+        }
         restoreAuthState()
         setupAuthStateListener()
 
@@ -139,6 +143,24 @@ class AuthService {
                 AuthState.shared.isRestoringAuth = false
             }
         }
+    }
+
+    private func configureLocalMode() {
+        isLoading = false
+        error = nil
+        isSignedIn = true
+        AuthState.shared.userEmail = LocalMode.email
+        AuthState.shared.isRestoringAuth = false
+        saveAuthState(isSignedIn: true, email: LocalMode.email, userId: LocalMode.userId)
+        saveTokens(
+            idToken: LocalMode.token,
+            refreshToken: LocalMode.refreshToken,
+            expiresIn: LocalMode.tokenLifetimeSeconds,
+            userId: LocalMode.userId
+        )
+        APIKeyService.shared.markLocalModeLoaded()
+        Task { await RewindDatabase.shared.configure(userId: LocalMode.userId) }
+        NSLog("OMI AUTH: Configured local mode session for %@", LocalMode.userId)
     }
 
     // MARK: - Auth Persistence (UserDefaults for dev builds)
@@ -240,6 +262,10 @@ class AuthService {
 
     @MainActor
     func signInWithApple() async throws {
+        if LocalMode.isEnabled {
+            configureLocalMode()
+            return
+        }
         // Use web OAuth directly — native Apple Sign In requires entitlements that
         // don't work reliably across dev/release builds. Web OAuth works everywhere.
         try await signIn(provider: "apple")
@@ -353,6 +379,10 @@ class AuthService {
 
     @MainActor
     func signInWithGoogle() async throws {
+        if LocalMode.isEnabled {
+            configureLocalMode()
+            return
+        }
         try await signIn(provider: "google")
     }
 
@@ -360,6 +390,10 @@ class AuthService {
 
     @MainActor
     private func signIn(provider: String) async throws {
+        if LocalMode.isEnabled {
+            configureLocalMode()
+            return
+        }
         // Guard against double sign-in (e.g., rapid button clicks before UI updates)
         guard !isLoading else {
             NSLog("OMI AUTH: Sign in already in progress, ignoring duplicate request")
@@ -705,6 +739,11 @@ class AuthService {
         familyName = newFamilyName
         NSLog("OMI AUTH: Updated name locally - given: %@, family: %@", newGivenName, newFamilyName)
 
+        if LocalMode.isEnabled {
+            NSLog("OMI AUTH: Local mode active; skipped remote profile update")
+            return
+        }
+
         // Try to update Firebase profile (best effort)
         // Skip during impersonation to avoid overwriting the target user's display name
         let isImpersonating = UserDefaults.standard.bool(forKey: "auth_isImpersonating")
@@ -734,6 +773,9 @@ class AuthService {
 
     /// Try to get name from Firebase user (after OAuth sign-in)
     func getNameFromFirebase() -> String? {
+        if LocalMode.isEnabled {
+            return nil
+        }
         if let displayName = Auth.auth().currentUser?.displayName, !displayName.isEmpty {
             return displayName
         }
@@ -755,6 +797,7 @@ class AuthService {
     /// but the user already has a name stored in Firestore from a previous sign-up.
     func loadNameFromBackendIfNeeded() {
         guard givenName.isEmpty else { return }
+        guard !LocalMode.isEnabled else { return }
         Task {
             do {
                 let profile = try await APIClient.shared.getUserProfile()
@@ -889,6 +932,9 @@ class AuthService {
 
     /// Refresh the ID token using the refresh token
     private func refreshIdToken() async throws -> String {
+        if LocalMode.isEnabled {
+            return LocalMode.token
+        }
         guard let refreshToken = storedRefreshToken else {
             throw AuthError.notSignedIn
         }
@@ -950,6 +996,9 @@ class AuthService {
     // MARK: - Get ID Token (for API calls)
 
     func getIdToken(forceRefresh: Bool = false) async throws -> String {
+        if LocalMode.isEnabled {
+            return LocalMode.token
+        }
         // Get the expected user ID (the currently signed-in user)
         let expectedUserId = UserDefaults.standard.string(forKey: kAuthUserId)
 
@@ -1021,6 +1070,10 @@ class AuthService {
 
     /// Fetches and logs user conversations (called after sign-in or on startup)
     func fetchConversations() {
+        if LocalMode.isEnabled {
+            log("Local mode active; skipping startup conversation fetch")
+            return
+        }
         Task {
             do {
                 log("Fetching user conversations...")
@@ -1056,7 +1109,9 @@ class AuthService {
             SentrySDK.setUser(nil)
         }
 
-        try Auth.auth().signOut()
+        if !LocalMode.isEnabled {
+            try Auth.auth().signOut()
+        }
         isSignedIn = false
         APIKeyService.shared.clear()
         // Clear saved auth state and tokens

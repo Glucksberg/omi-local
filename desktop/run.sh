@@ -12,6 +12,7 @@ Options (via environment variables):
   OMI_SKIP_BACKEND=1      Skip starting Rust backend (use remote backend via OMI_API_URL)
   OMI_SKIP_AUTH=1          Skip starting Python auth service (use remote auth via OMI_AUTH_URL)
   OMI_SKIP_TUNNEL=1        Skip Cloudflare tunnel (use OMI_API_URL from .env directly)
+  OMI_LOCAL_MODE=1          Run app-only omi-local mode (no Google/Firebase bootstrap)
   AUTH_PORT=10200           Auth service port (default: 10200)
   PORT=10201                Rust backend port (default: 10201, never use 8080)
   OMI_APP_NAME="Omi Dev"   App name (default: "Omi Dev")
@@ -64,8 +65,12 @@ if [ "$1" = "--yolo" ]; then
     export FIREBASE_API_KEY="AIzaSyD9dzBdglc7IO9pPDIOvqnCoTis_xKkkC8"
 fi
 
-# Clear system OPENAI_API_KEY so .env takes precedence
-unset OPENAI_API_KEY
+# Clear system OPENAI_API_KEY in vendor mode so .env/backend config takes precedence.
+# omi-local prefers pi's ChatGPT/Codex OAuth, but may still use OPENAI_API_KEY
+# when OMI_REMOTE_LLM_PROVIDER=openai is explicitly selected.
+if [ "${OMI_LOCAL_MODE:-0}" != "1" ]; then
+    unset OPENAI_API_KEY
+fi
 
 # Use Xcode's default toolchain to match the SDK version
 unset TOOLCHAINS
@@ -132,10 +137,16 @@ if [ "$URL_SCHEME" != "$EXPECTED_URL_SCHEME" ]; then
     echo "ERROR: APP_NAME '$APP_NAME' must use URL scheme '$EXPECTED_URL_SCHEME' (got '$URL_SCHEME')"
     exit 1
 fi
+LAUNCH_ARGS=()
+if [ "${OMI_LOCAL_MODE:-0}" = "1" ]; then
+    LAUNCH_ARGS+=(--local-mode)
+fi
+
 AUTOMATION_ARGS=()
 if [ "${OMI_ENABLE_LOCAL_AUTOMATION:-0}" = "1" ]; then
     AUTOMATION_PORT="${OMI_AUTOMATION_PORT:-47777}"
     AUTOMATION_ARGS+=(--automation-bridge "--automation-port=$AUTOMATION_PORT")
+    LAUNCH_ARGS+=("${AUTOMATION_ARGS[@]}")
 fi
 
 # Backend configuration (Rust)
@@ -240,13 +251,16 @@ fi
 # ─── Load .env and credentials ─────────────────────────────────────────
 cd "$BACKEND_DIR"
 
-# Copy .env if not present — try sibling dirs, then scaffold from .env.example
-if [ ! -f ".env" ] && [ -f "../backend/.env" ]; then
-    cp "../backend/.env" ".env"
-elif [ ! -f ".env" ] && [ -f "../Backend/.env" ]; then
-    cp "../Backend/.env" ".env"
+# Copy .env if not present — try sibling dirs, then scaffold from .env.example.
+# omi-local must not import backend/vendor credentials implicitly.
+if [ "${OMI_LOCAL_MODE:-0}" != "1" ]; then
+    if [ ! -f ".env" ] && [ -f "../backend/.env" ]; then
+        cp "../backend/.env" ".env"
+    elif [ ! -f ".env" ] && [ -f "../Backend/.env" ]; then
+        cp "../Backend/.env" ".env"
+    fi
 fi
-if [ ! -f ".env" ] && [ "$1" != "--yolo" ]; then
+if [ ! -f ".env" ] && [ "$1" != "--yolo" ] && [ "${OMI_LOCAL_MODE:-0}" != "1" ]; then
     echo ""
     echo "=== First-time setup ==="
     echo "No .env file found at $BACKEND_DIR/.env"
@@ -273,15 +287,19 @@ if [ ! -f ".env" ] && [ "$1" != "--yolo" ]; then
     exit 1
 fi
 
-# Symlink google-credentials.json if not present
-if [ ! -f "google-credentials.json" ] && [ -f "../backend/google-credentials.json" ]; then
-    ln -sf "../backend/google-credentials.json" "google-credentials.json"
-elif [ ! -f "google-credentials.json" ] && [ -f "../Backend/google-credentials.json" ]; then
-    ln -sf "../Backend/google-credentials.json" "google-credentials.json"
+# Symlink google-credentials.json if not present.
+if [ "${OMI_LOCAL_MODE:-0}" != "1" ]; then
+    if [ ! -f "google-credentials.json" ] && [ -f "../backend/google-credentials.json" ]; then
+        ln -sf "../backend/google-credentials.json" "google-credentials.json"
+    elif [ ! -f "google-credentials.json" ] && [ -f "../Backend/google-credentials.json" ]; then
+        ln -sf "../Backend/google-credentials.json" "google-credentials.json"
+    fi
 fi
 
-# Read environment from .env (skip if missing — yolo mode doesn't need it)
-if [ -f "$BACKEND_DIR/.env" ]; then
+# Read environment from .env (skip if missing — yolo mode doesn't need it).
+if [ "${OMI_LOCAL_MODE:-0}" = "1" ]; then
+    substep "Skipping backend .env import (OMI_LOCAL_MODE=1)"
+elif [ -f "$BACKEND_DIR/.env" ]; then
     set -a; source "$BACKEND_DIR/.env"; set +a
 fi
 
@@ -317,7 +335,11 @@ fi
 if [ -n "$FIREBASE_AUTH_PROJECT_ID" ]; then
     substep "Auth project: tokens validated against $FIREBASE_AUTH_PROJECT_ID, Firestore on $FIREBASE_PROJECT_ID"
 fi
-substep "Firebase project: $FIREBASE_PROJECT_ID | Backend port: $BACKEND_PORT | Auth port: $AUTH_PORT"
+if [ "${OMI_LOCAL_MODE:-0}" = "1" ]; then
+    substep "Local mode: Firebase bootstrap disabled | Backend port: $BACKEND_PORT | Auth port: $AUTH_PORT"
+else
+    substep "Firebase project: $FIREBASE_PROJECT_ID | Backend port: $BACKEND_PORT | Auth port: $AUTH_PORT"
+fi
 cd - > /dev/null
 
 # ─── Start Rust backend ───────────────────────────────────────────────
@@ -479,19 +501,27 @@ cp -f Desktop/Info.plist "$APP_BUNDLE/Contents/Info.plist"
 
 auth_debug "AFTER plist edits: auth_isSignedIn=$(defaults read "$BUNDLE_ID" auth_isSignedIn 2>&1 || true)"
 
-substep "Copying GoogleService-Info.plist"
-if [ -f "Desktop/Sources/GoogleService-Info-Dev.plist" ]; then
-    cp -f Desktop/Sources/GoogleService-Info-Dev.plist "$APP_BUNDLE/Contents/Resources/GoogleService-Info.plist"
+if [ "${OMI_LOCAL_MODE:-0}" = "1" ]; then
+    substep "Skipping GoogleService-Info.plist (OMI_LOCAL_MODE=1)"
 else
-    cp -f Desktop/Sources/GoogleService-Info.plist "$APP_BUNDLE/Contents/Resources/"
+    substep "Copying GoogleService-Info.plist"
+    if [ -f "Desktop/Sources/GoogleService-Info-Dev.plist" ]; then
+        cp -f Desktop/Sources/GoogleService-Info-Dev.plist "$APP_BUNDLE/Contents/Resources/GoogleService-Info.plist"
+    else
+        cp -f Desktop/Sources/GoogleService-Info.plist "$APP_BUNDLE/Contents/Resources/"
+    fi
+    /usr/libexec/PlistBuddy -c "Set :BUNDLE_ID $BUNDLE_ID" "$APP_BUNDLE/Contents/Resources/GoogleService-Info.plist" 2>/dev/null || true
 fi
-/usr/libexec/PlistBuddy -c "Set :BUNDLE_ID $BUNDLE_ID" "$APP_BUNDLE/Contents/Resources/GoogleService-Info.plist" 2>/dev/null || true
 
 # Copy resource bundle (contains app assets like permissions.gif, herologo.png, etc.)
 RESOURCE_BUNDLE="Desktop/.build/arm64-apple-macosx/debug/Omi Computer_Omi Computer.bundle"
 if [ -d "$RESOURCE_BUNDLE" ]; then
     substep "Copying resource bundle ($(du -sh "$RESOURCE_BUNDLE" 2>/dev/null | cut -f1))"
     cp -Rf "$RESOURCE_BUNDLE" "$APP_BUNDLE/Contents/Resources/"
+    if [ "${OMI_LOCAL_MODE:-0}" = "1" ]; then
+        substep "Removing Google service plists from resource bundle (OMI_LOCAL_MODE=1)"
+        find "$APP_BUNDLE/Contents/Resources" -name "GoogleService-Info*.plist" -delete
+    fi
 fi
 
 substep "Copying agent"
@@ -513,12 +543,31 @@ else
 fi
 
 substep "Copying .env.app"
-if [ -f ".env.app.dev" ]; then
+if [ "${OMI_LOCAL_MODE:-0}" = "1" ] && [ -f ".env.app.local" ]; then
+    cp -f .env.app.local "$APP_BUNDLE/Contents/Resources/.env"
+elif [ -f ".env.app.dev" ]; then
     cp -f .env.app.dev "$APP_BUNDLE/Contents/Resources/.env"
 elif [ -f ".env.app" ]; then
     cp -f .env.app "$APP_BUNDLE/Contents/Resources/.env"
 else
     touch "$APP_BUNDLE/Contents/Resources/.env"
+fi
+if [ "${OMI_LOCAL_MODE:-0}" = "1" ]; then
+    if grep -q "^OMI_LOCAL_MODE=" "$APP_BUNDLE/Contents/Resources/.env"; then
+        sed -i '' "s|^OMI_LOCAL_MODE=.*|OMI_LOCAL_MODE=1|" "$APP_BUNDLE/Contents/Resources/.env"
+    else
+        echo "OMI_LOCAL_MODE=1" >> "$APP_BUNDLE/Contents/Resources/.env"
+    fi
+    for KEY in OMI_REMOTE_LLM_PROVIDER OMI_REMOTE_LLM_MODEL OMI_LOCAL_TRANSCRIPTION_URL OMI_LOCAL_TRANSCRIPTION_ENABLED OMI_LOCAL_TTS_URL OMI_LOCAL_TTS_ENABLED; do
+        VALUE="${!KEY:-}"
+        if [ -n "$VALUE" ]; then
+            if grep -q "^${KEY}=" "$APP_BUNDLE/Contents/Resources/.env"; then
+                sed -i '' "s|^${KEY}=.*|${KEY}=$VALUE|" "$APP_BUNDLE/Contents/Resources/.env"
+            else
+                echo "$KEY=$VALUE" >> "$APP_BUNDLE/Contents/Resources/.env"
+            fi
+        fi
+    done
 fi
 # Set OMI_API_URL: tunnel URL if available, otherwise from .env or local backend
 if [ -n "$TUNNEL_URL" ]; then
@@ -535,7 +584,7 @@ else
 fi
 substep "OMI_API_URL=$EFFECTIVE_API_URL"
 # Bootstrap FIREBASE_API_KEY — check env var first (yolo mode), then backend .env
-if ! grep -q "^FIREBASE_API_KEY=" "$APP_BUNDLE/Contents/Resources/.env"; then
+if [ "${OMI_LOCAL_MODE:-0}" != "1" ] && ! grep -q "^FIREBASE_API_KEY=" "$APP_BUNDLE/Contents/Resources/.env"; then
     FIREBASE_KEY="${FIREBASE_API_KEY:-}"
     if [ -z "$FIREBASE_KEY" ] && [ -f "$BACKEND_DIR/.env" ]; then
         FIREBASE_KEY=$(grep "^FIREBASE_API_KEY=" "$BACKEND_DIR/.env" | head -1 | cut -d= -f2-)
@@ -548,7 +597,7 @@ fi
 # Bootstrap OMI_AUTH_URL — check env var first (yolo mode), then backend .env, then local auth
 if ! grep -q "^OMI_AUTH_URL=" "$APP_BUNDLE/Contents/Resources/.env"; then
     AUTH_URL="${OMI_AUTH_URL:-}"
-    if [ -z "$AUTH_URL" ] && [ -f "$BACKEND_DIR/.env" ]; then
+    if [ "${OMI_LOCAL_MODE:-0}" != "1" ] && [ -z "$AUTH_URL" ] && [ -f "$BACKEND_DIR/.env" ]; then
         AUTH_URL=$(grep "^OMI_AUTH_URL=" "$BACKEND_DIR/.env" | head -1 | cut -d= -f2-)
     fi
     if [ -z "$AUTH_URL" ]; then
@@ -562,12 +611,17 @@ fi
 # Do NOT fall back to OMI_API_URL — that's the Rust desktop-backend which doesn't serve these routes
 if ! grep -q "^OMI_PYTHON_API_URL=" "$APP_BUNDLE/Contents/Resources/.env"; then
     PYTHON_API_URL="${OMI_PYTHON_API_URL:-}"
-    if [ -z "$PYTHON_API_URL" ] && [ -f "$BACKEND_DIR/.env" ]; then
+    if [ "${OMI_LOCAL_MODE:-0}" != "1" ] && [ -z "$PYTHON_API_URL" ] && [ -f "$BACKEND_DIR/.env" ]; then
         PYTHON_API_URL=$(grep "^OMI_PYTHON_API_URL=" "$BACKEND_DIR/.env" | head -1 | cut -d= -f2-)
     fi
     if [ -z "$PYTHON_API_URL" ]; then
-        PYTHON_API_URL="https://api.omi.me"
-        substep "OMI_PYTHON_API_URL not set — defaulting to production: $PYTHON_API_URL"
+        if [ "${OMI_LOCAL_MODE:-0}" = "1" ]; then
+            PYTHON_API_URL="$EFFECTIVE_API_URL"
+            substep "OMI_PYTHON_API_URL not set — defaulting to local API URL: $PYTHON_API_URL"
+        else
+            PYTHON_API_URL="https://api.omi.me"
+            substep "OMI_PYTHON_API_URL not set — defaulting to production: $PYTHON_API_URL"
+        fi
     fi
     echo "OMI_PYTHON_API_URL=$PYTHON_API_URL" >> "$APP_BUNDLE/Contents/Resources/.env"
     substep "Set OMI_PYTHON_API_URL=$PYTHON_API_URL"
@@ -675,6 +729,10 @@ if [ -n "$SIGN_IDENTITY" ]; then
     if [ "$USE_FALLBACK_ENTITLEMENTS" = true ]; then
         cp Desktop/Omi.entitlements /tmp/omi-local-dev.entitlements
         /usr/libexec/PlistBuddy -c "Delete :com.apple.developer.applesignin" /tmp/omi-local-dev.entitlements 2>/dev/null || true
+        if [ "$SIGN_IDENTITY" = "-" ] || [ "${OMI_LOCAL_MODE:-0}" = "1" ]; then
+            /usr/libexec/PlistBuddy -c "Add :com.apple.security.cs.disable-library-validation bool true" /tmp/omi-local-dev.entitlements 2>/dev/null || \
+                /usr/libexec/PlistBuddy -c "Set :com.apple.security.cs.disable-library-validation true" /tmp/omi-local-dev.entitlements
+        fi
         rm -f "$PROFILE_PATH"
         EFFECTIVE_ENTITLEMENTS="/tmp/omi-local-dev.entitlements"
     fi
@@ -744,6 +802,9 @@ else
 fi
 echo "App:      $APP_PATH"
 echo "API URL:  $EFFECTIVE_API_URL"
+if [ "${OMI_LOCAL_MODE:-0}" = "1" ]; then
+    echo "Mode:     omi-local"
+fi
 if [ "${#AUTOMATION_ARGS[@]}" -gt 0 ]; then
     echo "Automation bridge: http://127.0.0.1:${AUTOMATION_PORT}"
 fi
@@ -751,8 +812,8 @@ echo "========================================"
 echo ""
 
 auth_debug "BEFORE launch: $(defaults read "$BUNDLE_ID" auth_isSignedIn 2>&1 || true)"
-if [ "${#AUTOMATION_ARGS[@]}" -gt 0 ]; then
-    open "$APP_PATH" --args "${AUTOMATION_ARGS[@]}" || "$APP_PATH/Contents/MacOS/$BINARY_NAME" "${AUTOMATION_ARGS[@]}" &
+if [ "${#LAUNCH_ARGS[@]}" -gt 0 ]; then
+    open "$APP_PATH" --args "${LAUNCH_ARGS[@]}" || "$APP_PATH/Contents/MacOS/$BINARY_NAME" "${LAUNCH_ARGS[@]}" &
 else
     open "$APP_PATH" || "$APP_PATH/Contents/MacOS/$BINARY_NAME" &
 fi

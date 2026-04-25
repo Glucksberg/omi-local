@@ -232,6 +232,7 @@ class AppState: ObservableObject {
 
     // Load API key from environment or .env file
     loadEnvironment()
+    LocalNetworkPolicy.installIfNeeded()
 
     // Setup lifecycle observers for saving conversations
     setupLifecycleObservers()
@@ -466,7 +467,7 @@ class AppState: ObservableObject {
             // API keys are fetched from the backend at runtime (APIKeyService).
             // Do NOT load them from .env — defer entirely to APIKeyService.fetchKeys().
             let backendServedKeys = ["GEMINI_API_KEY", "GOOGLE_CALENDAR_API_KEY"]
-            if backendServedKeys.contains(key) {
+            if !LocalMode.isEnabled && backendServedKeys.contains(key) {
               log("  Skipped \(key) (fetched from backend via APIKeyService)")
               continue
             }
@@ -483,7 +484,11 @@ class AppState: ObservableObject {
       }
     }
 
-    log("Environment loaded (API keys will be fetched from backend after auth)")
+    if LocalMode.isEnabled {
+      log("Environment loaded for local mode")
+    } else {
+      log("Environment loaded (API keys will be fetched from backend after auth)")
+    }
   }
 
   func openScreenRecordingPreferences() {
@@ -2717,6 +2722,7 @@ class AppState: ObservableObject {
     Task {
       await KnowledgeGraphStorage.shared.clearAll()
       log("Cleared local knowledge graph storage")
+      guard !LocalMode.isEnabled else { return }
       do {
         try await APIClient.shared.deleteKnowledgeGraph()
         log("Cleared server knowledge graph")

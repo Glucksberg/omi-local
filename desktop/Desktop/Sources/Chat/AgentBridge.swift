@@ -108,6 +108,10 @@ actor AgentBridge {
   /// Start the Node.js agent bridge process
   func start() async throws {
     guard !isRunning else { return }
+    if LocalMode.isEnabled && !LocalMode.isAgentBridgeEnabled {
+      log("AgentBridge: disabled in omi-local mode (configure a local provider or OMI_REMOTE_LLM_PROVIDER=openai-codex)")
+      throw BridgeError.localModeProviderUnavailable
+    }
 
     // Clean up any leftover state from a previous crashed process
     readTask?.cancel()
@@ -152,13 +156,34 @@ actor AgentBridge {
     // Pass harness mode to bridge (acp or piMono)
     env["HARNESS_MODE"] = harnessMode
 
+    let usesRemoteLLM = LocalMode.isEnabled && LocalMode.isRemoteLLMEnabled
+    if usesRemoteLLM {
+      let provider = LocalMode.remoteLLMProvider ?? LocalMode.openAICodexProvider
+      env["OMI_REMOTE_LLM_PROVIDER"] = provider
+      env["OMI_REMOTE_LLM_MODEL"] = LocalMode.remoteLLMModel
+
+      if provider == LocalMode.openAIAPIProvider {
+        guard let openAIKey = LocalMode.openAIAPIKey else {
+          log("AgentBridge: OpenAI API remote LLM requested but OPENAI_API_KEY is not configured")
+          throw BridgeError.localModeProviderUnavailable
+        }
+        env["OPENAI_API_KEY"] = openAIKey
+      } else {
+        env.removeValue(forKey: "OPENAI_API_KEY")
+      }
+
+      env.removeValue(forKey: "OMI_AUTH_TOKEN")
+      env.removeValue(forKey: "OMI_API_KEY")
+      log("AgentBridge: omi-local using remote \(provider) model \(LocalMode.remoteLLMModel)")
+    }
+
     // For piMono mode, inject the Firebase ID token so the bridge can
     // authenticate against POST /v2/chat/completions (which expects
     // Authorization: Bearer <firebase-id-token>).
     //
     // SECURITY: if we can't get a Firebase token, refuse to start. The bridge
     // must NEVER fall back to ANTHROPIC_API_KEY as the Omi backend credential.
-    if harnessMode == "piMono" {
+    if harnessMode == "piMono" && !usesRemoteLLM {
       let authService = await MainActor.run { AuthService.shared }
       let token: String
       do {
@@ -254,7 +279,7 @@ actor AgentBridge {
     startReadingStdout()
 
     // Start periodic token refresh for piMono mode (every 45 min)
-    if harnessMode == "piMono" {
+    if harnessMode == "piMono" && !usesRemoteLLM {
       tokenRefreshTask = Task { [weak self] in
         while !Task.isCancelled {
           try? await Task.sleep(nanoseconds: 45 * 60 * 1_000_000_000)
@@ -983,6 +1008,7 @@ enum BridgeError: LocalizedError {
   /// is the Unix-seconds timestamp of the cap reset (start of next UTC month).
   case quotaExceeded(plan: String, unit: String, used: Double, limit: Double?, resetAtUnix: Int?)
   case authMissing
+  case localModeProviderUnavailable
 
   var errorDescription: String? {
     switch self {
@@ -1008,6 +1034,8 @@ enum BridgeError: LocalizedError {
       return "Response stopped."
     case .authMissing:
       return "Please sign in to use AI chat."
+    case .localModeProviderUnavailable:
+      return "AI is not configured. For omi-local remote LLM, run scripts/login-openai-codex.mjs and set OMI_REMOTE_LLM_PROVIDER=openai-codex."
     case .agentError(let msg):
       let lower = msg.lowercased()
       if lower.contains("leaked") || lower.contains("api key") || lower.contains("api_key")

@@ -82,34 +82,21 @@ extension GoalRecord {
         let goalId = backendId ?? "local_\(id ?? 0)"
         let type = GoalType(rawValue: goalType) ?? .boolean
 
-        // Use Goal's memberwise-compatible approach via decoding
-        let json: [String: Any] = [
-            "id": goalId,
-            "title": title,
-            "description": goalDescription as Any,
-            "goal_type": type.rawValue,
-            "target_value": targetValue,
-            "current_value": currentValue,
-            "min_value": minValue,
-            "max_value": maxValue,
-            "unit": unit as Any,
-            "is_active": isActive,
-            "created_at": ISO8601DateFormatter().string(from: createdAt),
-            "updated_at": ISO8601DateFormatter().string(from: updatedAt),
-            "completed_at": completedAt.map { ISO8601DateFormatter().string(from: $0) } as Any,
-        ]
-
-        guard let data = try? JSONSerialization.data(withJSONObject: json),
-              let decoder: JSONDecoder = {
-                  let d = JSONDecoder()
-                  d.dateDecodingStrategy = .iso8601
-                  return d
-              }(),
-              let goal = try? decoder.decode(Goal.self, from: data)
-        else {
-            return nil
-        }
-        return goal
+        return Goal(
+            id: goalId,
+            title: title,
+            description: goalDescription,
+            goalType: type,
+            targetValue: targetValue,
+            currentValue: currentValue,
+            minValue: minValue,
+            maxValue: maxValue,
+            unit: unit,
+            isActive: isActive,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+            completedAt: completedAt
+        )
     }
 }
 

@@ -33,8 +33,8 @@ import { dirname, join } from "path";
 import { resolveSession, needsModelUpdate, filterSessionsToWarm, getRetryDeleteKey, type SessionEntry } from "./session-manager.js";
 import { fileURLToPath } from "url";
 import { createServer as createNetServer, type Socket } from "net";
-import { tmpdir } from "os";
-import { unlinkSync, appendFileSync } from "fs";
+import { homedir, tmpdir } from "os";
+import { unlinkSync, appendFileSync, existsSync, readFileSync } from "fs";
 import type {
   InboundMessage,
   OutboundMessage,
@@ -48,6 +48,32 @@ import type { PromptBlock } from "./adapters/interface.js";
 import { detectImageMimeType } from "./mime-detect.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+const OMI_LOCAL_REMOTE_PROVIDERS = new Set(["openai", "openai-codex"]);
+
+function expandHomePath(path: string): string {
+  if (path === "~") return homedir();
+  if (path.startsWith("~/")) return join(homedir(), path.slice(2));
+  return path;
+}
+
+function piAgentDir(): string {
+  const configured = process.env.PI_CODING_AGENT_DIR?.trim();
+  return configured ? expandHomePath(configured) : join(homedir(), ".pi", "agent");
+}
+
+function hasPiAuthCredential(provider: string, expectedType?: string): boolean {
+  const authPath = join(piAgentDir(), "auth.json");
+  if (!existsSync(authPath)) return false;
+  try {
+    const auth = JSON.parse(readFileSync(authPath, "utf8")) as Record<string, { type?: string }>;
+    const credential = auth[provider];
+    if (!credential) return false;
+    return expectedType ? credential.type === expectedType : true;
+  } catch {
+    return false;
+  }
+}
 
 // Resolve paths to bundled tools
 const playwrightCli = join(
@@ -1114,8 +1140,29 @@ async function runPiMonoMode(): Promise<void> {
   // upstream Anthropic provider secret to the Omi backend. If the token is
   // missing the bridge must fail loudly so Swift can prompt the user to
   // re-auth.
+  const remoteProvider = process.env.OMI_REMOTE_LLM_PROVIDER?.trim().toLowerCase();
+  const remoteModel = process.env.OMI_REMOTE_LLM_MODEL?.trim();
   const omiAuthToken = process.env.OMI_AUTH_TOKEN;
-  if (!omiAuthToken) {
+  if (remoteProvider && !OMI_LOCAL_REMOTE_PROVIDERS.has(remoteProvider)) {
+    const msg = `Unsupported omi-local remote provider: ${remoteProvider}`;
+    logErr(msg);
+    send({ type: "error", message: msg });
+    process.exit(1);
+  }
+  if (remoteProvider === "openai" && !process.env.OPENAI_API_KEY) {
+    const msg = "OpenAI remote LLM mode requires OPENAI_API_KEY; refusing to start";
+    logErr(msg);
+    send({ type: "error", message: msg });
+    process.exit(1);
+  }
+  if (remoteProvider === "openai-codex" && !hasPiAuthCredential("openai-codex", "oauth")) {
+    const msg =
+      "OpenAI Codex remote LLM mode requires OAuth credentials in ~/.pi/agent/auth.json; run scripts/login-openai-codex.mjs";
+    logErr(msg);
+    send({ type: "error", message: msg });
+    process.exit(1);
+  }
+  if (!remoteProvider && !omiAuthToken) {
     const msg = "pi-mono mode requires OMI_AUTH_TOKEN (Firebase ID token); refusing to start";
     logErr(msg);
     send({ type: "error", message: msg });
@@ -1132,7 +1179,11 @@ async function runPiMonoMode(): Promise<void> {
   const config = {
     omiApiBaseUrl: process.env.OMI_API_BASE_URL,
     authToken: omiAuthToken,
+    remoteProvider,
+    remoteModel,
   };
+  const defaultModel =
+    remoteModel || (remoteProvider && OMI_LOCAL_REMOTE_PROVIDERS.has(remoteProvider) ? "gpt-5.5" : "omi-sonnet");
 
   const adapter = new PiMonoAdapter(config);
   await adapter.start();
@@ -1193,7 +1244,7 @@ async function runPiMonoMode(): Promise<void> {
       case "query": {
         const qm = msg as QueryMessage;
         const cwd = qm.cwd || process.env.HOME || "/";
-        const model = qm.model || "omi-sonnet";
+        const model = qm.model || defaultModel;
         const sessionKey = qm.sessionKey ?? model;
 
         // Abort any previous query
@@ -1322,7 +1373,8 @@ async function runPiMonoMode(): Promise<void> {
         // its session without a round-trip to Swift for config.
         const wm = msg as WarmupMessage;
         const cwd = wm.cwd || process.env.HOME || "/";
-        const warmupSessions = wm.sessions ?? [{ key: "main", model: wm.model || "omi-sonnet" }];
+        const defaultWarmupSessions: WarmupSessionConfig[] = [{ key: "main", model: wm.model || defaultModel }];
+        const warmupSessions = wm.sessions ?? defaultWarmupSessions;
         for (const s of warmupSessions) {
           piSessions.set(s.key, {
             sessionId: "",

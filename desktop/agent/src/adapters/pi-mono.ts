@@ -22,6 +22,8 @@ import {
 } from "./interface.js";
 import type { WarmupSessionConfig } from "../protocol.js";
 
+const OPENAI_REMOTE_PROVIDERS = new Set(["openai", "openai-codex"]);
+
 // Pi-mono RPC command/event types
 interface PiRpcCommand {
   id?: string;
@@ -189,9 +191,14 @@ export class PiMonoAdapter implements HarnessAdapter {
   private pendingTokenRefresh = false;
   /** True when a system-prompt change was deferred because a prompt was active */
   private pendingSystemPromptRefresh = false;
+  private provider: string;
+  private defaultModel: string;
 
   constructor(config: HarnessConfig, piPath?: string, extensionPath?: string) {
     this.config = config;
+    this.provider = config.remoteProvider || "omi";
+    this.defaultModel =
+      config.remoteModel || (OPENAI_REMOTE_PROVIDERS.has(this.provider) ? "gpt-5.5" : "omi-sonnet");
     this.piPath = piPath || process.env.PI_MONO_PATH || resolveBundledPi();
     this.extensionPath =
       extensionPath ||
@@ -210,9 +217,9 @@ export class PiMonoAdapter implements HarnessAdapter {
       "-e",
       this.extensionPath,
       "--provider",
-      "omi",
+      this.provider,
       "--model",
-      "omi-sonnet",
+      this.defaultModel,
       // Auto-discover extensions and MCP servers from the user's machine
       // to maximize pi-mono's capabilities (e.g. Playwright, filesystem tools).
       // SECURITY NOTE: auto-discovered extensions run in the pi subprocess and
@@ -230,10 +237,13 @@ export class PiMonoAdapter implements HarnessAdapter {
     // SECURITY: require a Firebase ID token. We MUST NOT fall back to
     // ANTHROPIC_API_KEY — the Omi backend rejects provider keys and forwarding
     // one here would leak the upstream secret to api.omi.me.
-    if (!this.config.authToken) {
+    if (this.provider === "omi" && !this.config.authToken) {
       throw new Error(
         "pi-mono adapter requires config.authToken (Firebase ID token)"
       );
+    }
+    if (this.provider === "openai" && !process.env.OPENAI_API_KEY) {
+      throw new Error("pi-mono adapter requires OPENAI_API_KEY for OpenAI provider");
     }
 
     // Scrub any ANTHROPIC_API_KEY from the child env so the extension cannot
@@ -258,9 +268,18 @@ export class PiMonoAdapter implements HarnessAdapter {
     // Pass the raw Firebase ID token. pi's openai-completions client already
     // prepends `Authorization: Bearer ${apiKey}` — adding our own "Bearer "
     // prefix here would produce a malformed `Bearer Bearer <token>` header.
-    env.OMI_API_KEY = this.config.authToken;
-    if (this.config.omiApiBaseUrl) {
+    if (this.provider === "omi" && this.config.authToken) {
+      env.OMI_API_KEY = this.config.authToken;
+    } else {
+      delete env.OMI_API_KEY;
+    }
+    if (this.provider === "openai-codex") {
+      delete env.OPENAI_API_KEY;
+    }
+    if (this.provider === "omi" && this.config.omiApiBaseUrl) {
       env.OMI_API_BASE_URL = this.config.omiApiBaseUrl;
+    } else if (this.provider !== "omi") {
+      delete env.OMI_API_BASE_URL;
     }
     // Forward OMI_BRIDGE_PIPE so the extension can register omi-tools
     // (execute_sql, semantic_search, etc.) that forward to Swift.
@@ -330,7 +349,7 @@ export class PiMonoAdapter implements HarnessAdapter {
   }
 
   async createSession(opts: SessionOpts): Promise<string> {
-    const mapped = opts.model ? mapModel(opts.model) : undefined;
+    const mapped = this.mapModel(opts.model);
 
     // Pi bakes the system prompt at spawn time via --system-prompt. If the
     // caller requested a different prompt than the currently-running process,
@@ -348,14 +367,11 @@ export class PiMonoAdapter implements HarnessAdapter {
       systemPrompt: opts.systemPrompt,
     });
 
-    // Set model if specified (map claude-* → omi-*)
-    if (mapped) {
-      this.sendCommand({
-        type: "set_model",
-        provider: "omi",
-        modelId: mapped,
-      });
-    }
+    this.sendCommand({
+      type: "set_model",
+      provider: this.provider,
+      modelId: mapped,
+    });
 
     return sessionId;
   }
@@ -460,14 +476,14 @@ export class PiMonoAdapter implements HarnessAdapter {
   }
 
   async setModel(sessionId: string, model: string): Promise<void> {
-    const mapped = mapModel(model);
+    const mapped = this.mapModel(model);
     const session = this.sessions.get(sessionId);
     if (session) {
       session.model = mapped;
     }
     this.sendCommand({
       type: "set_model",
-      provider: "omi",
+      provider: this.provider,
       modelId: mapped,
     });
   }
@@ -580,13 +596,20 @@ export class PiMonoAdapter implements HarnessAdapter {
       case HarnessFeature.SESSION_RESUME:
         return true;
       case HarnessFeature.OAUTH:
-        return false; // Uses Firebase token, not OAuth
+        return this.provider === "openai-codex";
       default:
         return false;
     }
   }
 
   // ── Private helpers ──────────────────────────────────────────────────
+
+  private mapModel(model: string | undefined): string {
+    if (OPENAI_REMOTE_PROVIDERS.has(this.provider)) {
+      return this.config.remoteModel || model || this.defaultModel;
+    }
+    return model ? mapModel(model) : this.defaultModel;
+  }
 
   private sendCommand(cmd: PiRpcCommand): void {
     if (!this.process?.stdin?.writable) {

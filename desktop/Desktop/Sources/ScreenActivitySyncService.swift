@@ -28,6 +28,10 @@ actor ScreenActivitySyncService {
 
     /// Start the sync loop. Call after auth is established and database is ready.
     func start() {
+        guard !LocalMode.isEnabled else {
+            log("ScreenActivitySync: disabled in omi-local mode")
+            return
+        }
         guard !isRunning else {
             log("ScreenActivitySync: already running")
             return

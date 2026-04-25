@@ -18,6 +18,9 @@ actor EmbeddingService {
 
   /// Backend proxy base URL (from OMI_API_URL env var)
   private static var proxyBaseURL: String {
+    if LocalMode.isEnabled {
+      return LocalMode.localAIProxyURL ?? ""
+    }
     if let cString = getenv("OMI_API_URL"), let url = String(validatingUTF8: cString), !url.isEmpty {
       return url.hasSuffix("/") ? url : url + "/"
     }

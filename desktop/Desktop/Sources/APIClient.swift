@@ -5,6 +5,14 @@ actor APIClient {
   // Primary data backend URL — Python backend (api.omi.me) is the single source of truth for all data CRUD.
   // Override via OMI_PYTHON_API_URL for local dev.
   var baseURL: String {
+    if LocalMode.isEnabled {
+      if let cString = getenv("OMI_PYTHON_API_URL"), let url = String(validatingUTF8: cString),
+        !url.isEmpty
+      {
+        return url.hasSuffix("/") ? url : url + "/"
+      }
+      return LocalMode.localAPIURL
+    }
     if let cString = getenv("OMI_PYTHON_API_URL"), let url = String(validatingUTF8: cString),
       !url.isEmpty
     {
@@ -18,6 +26,9 @@ actor APIClient {
   // chat AI, and title generation are on Python.
   // Set via OMI_API_URL env var (in .env).
   var rustBackendURL: String {
+    if LocalMode.isEnabled {
+      return LocalMode.localAPIURL
+    }
     // First check getenv() for values set by setenv() in loadEnvironment()
     if let cString = getenv("OMI_API_URL"), let url = String(validatingUTF8: cString), !url.isEmpty
     {
@@ -48,6 +59,7 @@ actor APIClient {
   init() {
     let config = URLSessionConfiguration.default
     config.timeoutIntervalForRequest = 30
+    LocalNetworkPolicy.apply(to: config)
     self.session = URLSession(configuration: config)
 
     self.decoder = Self.makeDecoder()
@@ -123,6 +135,7 @@ actor APIClient {
   ) async throws -> T {
     let base = customBaseURL ?? baseURL
     let url = URL(string: base + endpoint)!
+    try LocalNetworkPolicy.validate(url)
     var request = URLRequest(url: url)
     request.httpMethod = "GET"
     request.allHTTPHeaderFields = try await buildHeaders(requireAuth: requireAuth)
@@ -138,6 +151,7 @@ actor APIClient {
   ) async throws -> T {
     let base = customBaseURL ?? baseURL
     let url = URL(string: base + endpoint)!
+    try LocalNetworkPolicy.validate(url)
     log("APIClient: POST \(url.absoluteString)")
     var request = URLRequest(url: url)
     request.httpMethod = "POST"
@@ -154,6 +168,7 @@ actor APIClient {
   ) async throws -> T {
     let base = customBaseURL ?? baseURL
     let url = URL(string: base + endpoint)!
+    try LocalNetworkPolicy.validate(url)
     var request = URLRequest(url: url)
     request.httpMethod = "POST"
     request.allHTTPHeaderFields = try await buildHeaders(requireAuth: requireAuth)
@@ -168,6 +183,7 @@ actor APIClient {
   ) async throws {
     let base = customBaseURL ?? baseURL
     let url = URL(string: base + endpoint)!
+    try LocalNetworkPolicy.validate(url)
     var request = URLRequest(url: url)
     request.httpMethod = "DELETE"
     request.allHTTPHeaderFields = try await buildHeaders(requireAuth: requireAuth)
@@ -190,6 +206,9 @@ actor APIClient {
   // MARK: - Request Execution
 
   private func performRequest<T: Decodable>(_ request: URLRequest) async throws -> T {
+    if let url = request.url {
+      try LocalNetworkPolicy.validate(url)
+    }
     let (data, response) = try await session.data(for: request)
 
     guard let httpResponse = response as? HTTPURLResponse else {
@@ -1918,6 +1937,12 @@ extension APIClient {
     if let cache = goalsCache, let time = goalsCacheTime, Date().timeIntervalSince(time) < 5 {
       return cache
     }
+    if LocalMode.isEnabled {
+      let goals = try await GoalStorage.shared.getLocalGoals()
+      goalsCache = goals
+      goalsCacheTime = Date()
+      return goals
+    }
     let goals: [Goal] = try await get("v1/goals/all")
     goalsCache = goals
     goalsCacheTime = Date()
@@ -1936,6 +1961,21 @@ extension APIClient {
     unit: String? = nil,
     source: String? = nil
   ) async throws -> Goal {
+    if LocalMode.isEnabled {
+      let goal = try await GoalStorage.shared.createLocalGoal(
+        title: title,
+        description: description,
+        goalType: goalType,
+        targetValue: targetValue,
+        currentValue: currentValue,
+        minValue: minValue,
+        maxValue: maxValue,
+        unit: unit
+      )
+      goalsCache = nil
+      return goal
+    }
+
     struct CreateGoalRequest: Encodable {
       let title: String
       let description: String?
@@ -1976,6 +2016,15 @@ extension APIClient {
 
   /// Updates a goal's progress
   func updateGoalProgress(goalId: String, currentValue: Double) async throws -> Goal {
+    if LocalMode.isEnabled {
+      let goal = try await GoalStorage.shared.updateProgress(
+        backendId: goalId,
+        currentValue: currentValue
+      )
+      goalsCache = nil
+      return goal
+    }
+
     let url = URL(string: baseURL + "v1/goals/\(goalId)/progress?current_value=\(currentValue)")!
     var request = URLRequest(url: url)
     request.httpMethod = "PATCH"
@@ -1997,6 +2046,17 @@ extension APIClient {
   func updateGoal(goalId: String, title: String, currentValue: Double, targetValue: Double)
     async throws -> Goal
   {
+    if LocalMode.isEnabled {
+      let goal = try await GoalStorage.shared.updateGoal(
+        backendId: goalId,
+        title: title,
+        currentValue: currentValue,
+        targetValue: targetValue
+      )
+      goalsCache = nil
+      return goal
+    }
+
     struct UpdateGoalRequest: Encodable {
       let title: String
       let currentValue: Double
@@ -2022,12 +2082,22 @@ extension APIClient {
 
   /// Gets completed goals for history
   func getCompletedGoals() async throws -> [Goal] {
+    if LocalMode.isEnabled {
+      return try await GoalStorage.shared.getLocalGoals(activeOnly: false)
+        .filter { $0.completedAt != nil || !$0.isActive }
+    }
     let goals: [Goal] = try await get("v1/goals/completed")
     return goals
   }
 
   /// Completes a goal (marks as inactive with completed_at)
   func completeGoal(id: String) async throws -> Goal {
+    if LocalMode.isEnabled {
+      let goal = try await GoalStorage.shared.markCompleted(backendId: id)
+      goalsCache = nil
+      return goal
+    }
+
     struct CompleteGoalRequest: Encodable {
       let is_active: Bool
       let completed_at: String
@@ -2060,6 +2130,11 @@ extension APIClient {
 
   /// Deletes a goal
   func deleteGoal(id: String) async throws {
+    if LocalMode.isEnabled {
+      try await GoalStorage.shared.softDelete(backendId: id)
+      goalsCache = nil
+      return
+    }
     try await delete("v1/goals/\(id)")
     goalsCache = nil
   }
@@ -2548,6 +2623,38 @@ struct Goal: Codable, Identifiable {
   let updatedAt: Date
   let completedAt: Date?
   let source: String?
+
+  init(
+    id: String,
+    title: String,
+    description: String?,
+    goalType: GoalType,
+    targetValue: Double,
+    currentValue: Double,
+    minValue: Double = 0.0,
+    maxValue: Double = 100.0,
+    unit: String?,
+    isActive: Bool = true,
+    createdAt: Date = Date(),
+    updatedAt: Date = Date(),
+    completedAt: Date? = nil,
+    source: String? = nil
+  ) {
+    self.id = id
+    self.title = title
+    self.description = description
+    self.goalType = goalType
+    self.targetValue = targetValue
+    self.currentValue = currentValue
+    self.minValue = minValue
+    self.maxValue = maxValue
+    self.unit = unit
+    self.isActive = isActive
+    self.createdAt = createdAt
+    self.updatedAt = updatedAt
+    self.completedAt = completedAt
+    self.source = source
+  }
 
   enum CodingKeys: String, CodingKey {
     case id, title, description, unit, source
@@ -4670,8 +4777,9 @@ extension APIClient {
   /// Synthesize speech via the backend TTS proxy (ElevenLabs key stays server-side).
   /// Returns raw audio data (audio/mpeg).
   func synthesizeSpeech(request: TtsSynthesizeRequest) async throws -> Data {
-    let base = rustBackendURL
+    let base = LocalMode.isEnabled ? (LocalMode.localTTSURL ?? rustBackendURL) : rustBackendURL
     let url = URL(string: base + "v1/tts/synthesize")!
+    try LocalNetworkPolicy.validate(url)
     var urlRequest = URLRequest(url: url)
     urlRequest.httpMethod = "POST"
     urlRequest.allHTTPHeaderFields = try await buildHeaders(requireAuth: true)

@@ -74,6 +74,10 @@ actor AgentSyncService {
 
     /// Start the sync loop. Called after the VM is ready and DB is uploaded.
     func start(vmIP: String, authToken: String) {
+        guard !LocalMode.isEnabled else {
+            log("AgentSync: disabled in omi-local mode")
+            return
+        }
         guard !isRunning else {
             log("AgentSync: already running, updating VM address to \(vmIP)")
             self.vmIP = vmIP

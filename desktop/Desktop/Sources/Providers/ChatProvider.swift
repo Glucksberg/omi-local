@@ -810,6 +810,12 @@ A screenshot may be attached — use it silently only if relevant. Never mention
     ///   which already holds modeSwitchInProgress. External callers (sendMessage)
     ///   pass false (the default) and will wait for any in-flight switch.
     private func ensureBridgeStarted(fromModeSwitch: Bool = false) async -> Bool {
+        if LocalMode.isEnabled && !LocalMode.isAgentBridgeEnabled {
+            errorMessage = "AI is not configured. Run scripts/login-openai-codex.mjs, then set OMI_REMOTE_LLM_PROVIDER=openai-codex."
+            log("ChatProvider: agent bridge skipped in omi-local mode")
+            return false
+        }
+
         // Wait for any in-flight mode switch to finish before touching the bridge.
         // Without this, a query arriving mid-switch could restart the OLD bridge
         // with the wrong harness mode. Skipped when called from switchBridgeMode
@@ -856,12 +862,13 @@ A screenshot may be attached — use it silently only if relevant. Never mention
             // This is the only place the system prompt is built and applied.
             let mainSystemPrompt = buildSystemPrompt(contextString: formatMemoriesSection())
             let floatingSystemPrompt = Self.floatingBarSystemPromptPrefix + "\n\n" + mainSystemPrompt
-            let floatingModel = ShortcutSettings.shared.selectedModel.isEmpty
+            let chatModel = LocalMode.isRemoteLLMEnabled ? LocalMode.remoteLLMModel : ModelQoS.Claude.chat
+            let floatingModel = LocalMode.isRemoteLLMEnabled ? LocalMode.remoteLLMModel : (ShortcutSettings.shared.selectedModel.isEmpty
                 ? ModelQoS.Claude.defaultSelection
-                : ShortcutSettings.shared.selectedModel
+                : ShortcutSettings.shared.selectedModel)
             cachedMainSystemPrompt = mainSystemPrompt
             await agentBridge.warmupSession(cwd: workingDirectory, sessions: [
-                .init(key: "main", model: ModelQoS.Claude.chat, systemPrompt: mainSystemPrompt),
+                .init(key: "main", model: chatModel, systemPrompt: mainSystemPrompt),
                 .init(key: "floating", model: floatingModel, systemPrompt: floatingSystemPrompt)
             ])
             return true
