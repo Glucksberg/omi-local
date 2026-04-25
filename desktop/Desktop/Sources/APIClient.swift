@@ -1292,6 +1292,16 @@ extension APIClient {
     tags: [String]? = nil,
     includeDismissed: Bool = false
   ) async throws -> [ServerMemory] {
+    if LocalMode.isEnabled {
+      return try await MemoryStorage.shared.getLocalMemories(
+        limit: limit,
+        offset: offset,
+        category: category,
+        tags: tags,
+        includeDismissed: includeDismissed
+      )
+    }
+
     var endpoint = "v3/memories?limit=\(limit)&offset=\(offset)"
     if let category = category {
       endpoint += "&category=\(category)"
@@ -1320,6 +1330,25 @@ extension APIClient {
     windowTitle: String? = nil,
     headline: String? = nil
   ) async throws -> CreateMemoryResponse {
+    if LocalMode.isEnabled {
+      let record = try await MemoryStorage.shared.createLocalMemory(
+        content: content,
+        visibility: visibility,
+        category: category ?? .manual,
+        confidence: confidence,
+        sourceApp: sourceApp,
+        contextSummary: contextSummary,
+        tags: tags,
+        reasoning: reasoning,
+        currentActivity: currentActivity,
+        source: source,
+        windowTitle: windowTitle,
+        headline: headline
+      )
+      let memoryId = record.toServerMemory()?.id ?? "local_\(record.id ?? 0)"
+      return CreateMemoryResponse(id: memoryId, message: "created locally")
+    }
+
     struct CreateRequest: Encodable {
       let content: String
       let visibility: String
@@ -1374,6 +1403,26 @@ extension APIClient {
       memories.count <= Self.memoriesBatchMaxSize,
       "createMemoriesBatch received \(memories.count) memories, max is \(Self.memoriesBatchMaxSize)"
     )
+    if LocalMode.isEnabled {
+      var createdMemories: [BatchMemoriesResponse.BatchMemory] = []
+      for memory in memories {
+        let record = try await MemoryStorage.shared.createLocalMemory(
+          content: memory.content,
+          visibility: memory.visibility,
+          category: .manual,
+          tags: memory.tags,
+          headline: memory.headline
+        )
+        createdMemories.append(
+          BatchMemoriesResponse.BatchMemory(
+            id: record.toServerMemory()?.id ?? "local_\(record.id ?? 0)",
+            content: memory.content
+          )
+        )
+      }
+      return BatchMemoriesResponse(memories: createdMemories, createdCount: createdMemories.count)
+    }
+
     struct BatchRequest: Encodable {
       let memories: [MemoryBatchItem]
     }
@@ -1383,11 +1432,21 @@ extension APIClient {
 
   /// Deletes a memory by ID
   func deleteMemory(id: String) async throws {
+    if LocalMode.isEnabled {
+      try await MemoryStorage.shared.deleteMemoryByMemoryId(id)
+      return
+    }
+
     try await delete("v3/memories/\(id)")
   }
 
   /// Edits a memory's content
   func editMemory(id: String, content: String) async throws {
+    if LocalMode.isEnabled {
+      try await MemoryStorage.shared.updateContent(memoryId: id, content: content)
+      return
+    }
+
     struct EditRequest: Encodable {
       let value: String
     }
@@ -1397,6 +1456,11 @@ extension APIClient {
 
   /// Updates a memory's visibility
   func updateMemoryVisibility(id: String, visibility: String) async throws {
+    if LocalMode.isEnabled {
+      try await MemoryStorage.shared.updateVisibility(memoryId: id, visibility: visibility)
+      return
+    }
+
     struct VisibilityRequest: Encodable {
       let value: String
     }
@@ -1408,6 +1472,14 @@ extension APIClient {
   func updateMemoryReadStatus(id: String, isRead: Bool? = nil, isDismissed: Bool? = nil)
     async throws -> ServerMemory
   {
+    if LocalMode.isEnabled {
+      return try await MemoryStorage.shared.updateReadDismissedStatus(
+        memoryId: id,
+        isRead: isRead,
+        isDismissed: isDismissed
+      )
+    }
+
     struct UpdateReadRequest: Encodable {
       let isRead: Bool?
       let isDismissed: Bool?
@@ -1423,11 +1495,21 @@ extension APIClient {
 
   /// Marks all memories as read
   func markAllMemoriesRead() async throws {
+    if LocalMode.isEnabled {
+      try await MemoryStorage.shared.markAllAsRead()
+      return
+    }
+
     let _: MemoryStatusResponse = try await post("v3/memories/mark-all-read", body: EmptyBody())
   }
 
   /// Updates visibility of all memories
   func updateAllMemoriesVisibility(visibility: String) async throws {
+    if LocalMode.isEnabled {
+      try await MemoryStorage.shared.updateAllVisibility(visibility)
+      return
+    }
+
     struct VisibilityRequest: Encodable {
       let value: String
     }
@@ -1437,6 +1519,11 @@ extension APIClient {
 
   /// Deletes all memories
   func deleteAllMemories() async throws {
+    if LocalMode.isEnabled {
+      try await MemoryStorage.shared.deleteAllMemories()
+      return
+    }
+
     try await delete("v3/memories")
   }
 

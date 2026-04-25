@@ -11,6 +11,25 @@ actor MemoryStorage {
 
     private init() {}
 
+    private static func localRowId(from memoryId: String) -> Int64? {
+        guard memoryId.hasPrefix("local_") else { return nil }
+        return Int64(memoryId.dropFirst("local_".count))
+    }
+
+    private static func fetchRecord(database: Database, memoryId: String) throws -> MemoryRecord? {
+        if let record = try MemoryRecord
+            .filter(Column("backendId") == memoryId)
+            .fetchOne(database) {
+            return record
+        }
+
+        if let localId = localRowId(from: memoryId) {
+            return try MemoryRecord.fetchOne(database, key: localId)
+        }
+
+        return nil
+    }
+
     /// Invalidate cached DB queue (called on user switch / sign-out)
     func invalidateCache() {
         _dbQueue = nil
@@ -296,6 +315,170 @@ actor MemoryStorage {
             try MemoryRecord
                 .filter(Column("backendId") == backendId)
                 .fetchOne(database)
+        }
+    }
+
+    // MARK: - Local Mutation Operations
+
+    /// Create or adopt a local memory for omi-local mode.
+    ///
+    /// Some extraction flows write a local unsynced row first, then call the API
+    /// to sync it. In omi-local mode, adopting a matching orphan avoids creating
+    /// a duplicate row while still giving the caller a stable "backend" ID.
+    @discardableResult
+    func createLocalMemory(
+        content: String,
+        visibility: String = "private",
+        category: MemoryCategory = .manual,
+        confidence: Double? = nil,
+        sourceApp: String? = nil,
+        contextSummary: String? = nil,
+        tags: [String] = [],
+        reasoning: String? = nil,
+        currentActivity: String? = nil,
+        source: String? = nil,
+        windowTitle: String? = nil,
+        headline: String? = nil
+    ) async throws -> MemoryRecord {
+        let db = try await ensureInitialized()
+        let backendId = "local_\(UUID().uuidString)"
+        let now = Date()
+
+        return try await db.write { database in
+            let tagsJson: String?
+            if !tags.isEmpty,
+               let data = try? JSONEncoder().encode(tags),
+               let json = String(data: data, encoding: .utf8) {
+                tagsJson = json
+            } else {
+                tagsJson = nil
+            }
+
+            if var orphan = try MemoryRecord
+                .filter(Column("backendSynced") == false)
+                .filter(Column("backendId") == nil)
+                .filter(Column("deleted") == false)
+                .filter(Column("content") == content)
+                .fetchOne(database) {
+                orphan.backendId = backendId
+                orphan.backendSynced = true
+                orphan.category = category.rawValue
+                orphan.visibility = visibility
+                orphan.tagsJson = tagsJson
+                orphan.confidence = confidence
+                orphan.sourceApp = sourceApp
+                orphan.contextSummary = contextSummary
+                orphan.reasoning = reasoning
+                orphan.currentActivity = currentActivity
+                orphan.source = source
+                orphan.windowTitle = windowTitle
+                orphan.headline = headline
+                orphan.updatedAt = now
+                try orphan.update(database)
+                return orphan
+            }
+
+            let record = MemoryRecord(
+                backendId: backendId,
+                backendSynced: true,
+                content: content,
+                category: category.rawValue,
+                tagsJson: tagsJson,
+                visibility: visibility,
+                manuallyAdded: category == .manual,
+                source: source,
+                confidence: confidence,
+                reasoning: reasoning,
+                sourceApp: sourceApp,
+                windowTitle: windowTitle,
+                contextSummary: contextSummary,
+                currentActivity: currentActivity,
+                headline: headline,
+                createdAt: now,
+                updatedAt: now
+            )
+            return try record.inserted(database)
+        }
+    }
+
+    func deleteMemoryByMemoryId(_ memoryId: String) async throws {
+        let db = try await ensureInitialized()
+
+        try await db.write { database in
+            guard var record = try Self.fetchRecord(database: database, memoryId: memoryId) else {
+                throw MemoryStorageError.recordNotFound
+            }
+
+            record.deleted = true
+            record.updatedAt = Date()
+            try record.update(database)
+        }
+    }
+
+    func updateContent(memoryId: String, content: String) async throws {
+        let db = try await ensureInitialized()
+
+        try await db.write { database in
+            guard var record = try Self.fetchRecord(database: database, memoryId: memoryId) else {
+                throw MemoryStorageError.recordNotFound
+            }
+
+            record.content = content
+            record.updatedAt = Date()
+            try record.update(database)
+        }
+    }
+
+    func updateVisibility(memoryId: String, visibility: String) async throws {
+        let db = try await ensureInitialized()
+
+        try await db.write { database in
+            guard var record = try Self.fetchRecord(database: database, memoryId: memoryId) else {
+                throw MemoryStorageError.recordNotFound
+            }
+
+            record.visibility = visibility
+            record.updatedAt = Date()
+            try record.update(database)
+        }
+    }
+
+    func updateAllVisibility(_ visibility: String) async throws {
+        let db = try await ensureInitialized()
+
+        try await db.write { database in
+            try database.execute(
+                sql: "UPDATE memories SET visibility = ?, updatedAt = ? WHERE deleted = 0",
+                arguments: [visibility, Date()]
+            )
+        }
+    }
+
+    func updateReadDismissedStatus(
+        memoryId: String,
+        isRead: Bool? = nil,
+        isDismissed: Bool? = nil
+    ) async throws -> ServerMemory {
+        let db = try await ensureInitialized()
+
+        return try await db.write { database in
+            guard var record = try Self.fetchRecord(database: database, memoryId: memoryId) else {
+                throw MemoryStorageError.recordNotFound
+            }
+
+            if let isRead {
+                record.isRead = isRead
+            }
+            if let isDismissed {
+                record.isDismissed = isDismissed
+            }
+            record.updatedAt = Date()
+            try record.update(database)
+
+            guard let memory = record.toServerMemory() else {
+                throw MemoryStorageError.syncFailed("Failed to convert updated memory")
+            }
+            return memory
         }
     }
 

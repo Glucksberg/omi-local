@@ -251,6 +251,20 @@ class MemoriesViewModel: ObservableObject {
     // Silently sync from API and reload from local cache (local-first pattern)
     do {
       let reloadLimit = max(pageSize, memories.count)
+      if LocalMode.isEnabled {
+        let localMemories = try await MemoryStorage.shared.getLocalMemories(
+          limit: reloadLimit,
+          offset: 0
+        )
+        log(
+          "MemoriesViewModel: omi-local auto-refresh loaded \(localMemories.count) memories from SQLite"
+        )
+        memories = localMemories
+        currentOffset = localMemories.count
+        hasMoreMemories = localMemories.count >= reloadLimit
+        return
+      }
+
       let apiMemories = try await APIClient.shared.getMemories(limit: reloadLimit, offset: 0)
 
       // Sync API results to local cache
@@ -501,6 +515,26 @@ class MemoriesViewModel: ObservableObject {
     errorMessage = nil
     currentOffset = 0
 
+    if LocalMode.isEnabled {
+      do {
+        let localMemories = try await MemoryStorage.shared.getLocalMemories(
+          limit: pageSize,
+          offset: 0
+        )
+        memories = localMemories
+        currentOffset = localMemories.count
+        hasMoreMemories = localMemories.count >= pageSize
+        hasLoadedInitially = true
+        await loadTagCountsFromDatabase()
+        log("MemoriesViewModel: omi-local loaded \(localMemories.count) memories from SQLite")
+      } catch {
+        errorMessage = error.localizedDescription
+        logError("MemoriesViewModel: Failed to load omi-local memories", error: error)
+      }
+      isLoading = false
+      return
+    }
+
     // Step 1: Load from local cache first for instant display
     // Use timeout to avoid blocking UI if database is initializing (e.g. recovery)
     do {
@@ -669,6 +703,12 @@ class MemoriesViewModel: ObservableObject {
       }
     } catch {
       log("MemoriesViewModel: Local cache pagination failed, trying API")
+    }
+
+    if LocalMode.isEnabled {
+      hasMoreMemories = false
+      isLoadingMore = false
+      return
     }
 
     // Step 2: If local cache is exhausted, fetch from API
