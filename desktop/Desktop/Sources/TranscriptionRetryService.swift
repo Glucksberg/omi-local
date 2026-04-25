@@ -18,6 +18,11 @@ class TranscriptionRetryService {
 
     /// Start the retry service (call on app launch)
     func start() {
+        if LocalMode.isEnabled {
+            log("TranscriptionRetryService: omi-local mode uses local sessions; backend retry timer disabled")
+            return
+        }
+
         guard retryTimer == nil else { return }
 
         log("TranscriptionRetryService: Starting retry timer (interval: \(retryInterval)s)")
@@ -41,6 +46,11 @@ class TranscriptionRetryService {
     /// Recover pending transcriptions on app launch
     /// Call this after database initialization
     func recoverPendingTranscriptions() async {
+        if LocalMode.isEnabled {
+            await recoverLocalModeTranscriptions()
+            return
+        }
+
         log("TranscriptionRetryService: Checking for pending transcriptions...")
 
         do {
@@ -114,6 +124,7 @@ class TranscriptionRetryService {
 
     /// Process the retry queue (called periodically by timer)
     private func processRetryQueue() async {
+        guard !LocalMode.isEnabled else { return }
         // Skip if user is signed out (tokens are cleared)
         guard await AuthState.shared.isSignedIn else { return }
         guard !isProcessing else {
@@ -157,6 +168,45 @@ class TranscriptionRetryService {
             } else {
                 logError("TranscriptionRetryService: Queue processing failed (\(consecutiveDBFailures)/\(maxConsecutiveDBFailures))", error: error)
             }
+        }
+    }
+
+    private func recoverLocalModeTranscriptions() async {
+        log("TranscriptionRetryService: omi-local recovery checking local sessions")
+
+        do {
+            var completed = 0
+            var deleted = 0
+            var skippedRecent = 0
+
+            var sessions = try await TranscriptionStorage.shared.getCrashedSessions()
+            sessions.append(contentsOf: try await TranscriptionStorage.shared.getPendingUploadSessions())
+            sessions.append(contentsOf: try await TranscriptionStorage.shared.getStuckUploadingSessions(olderThan: 0))
+            sessions.append(contentsOf: try await TranscriptionStorage.shared.getFailedSessions(maxRetries: Int.max))
+
+            var seen = Set<Int64>()
+            for session in sessions {
+                guard let sessionId = session.id, seen.insert(sessionId).inserted else { continue }
+
+                let sessionAge = Date().timeIntervalSince(session.createdAt)
+                if session.status == .recording && sessionAge < 30 {
+                    skippedRecent += 1
+                    continue
+                }
+
+                let segmentCount = try await TranscriptionStorage.shared.getSegmentCount(sessionId: sessionId)
+                if segmentCount == 0 {
+                    try await TranscriptionStorage.shared.deleteSession(id: sessionId)
+                    deleted += 1
+                } else {
+                    try await TranscriptionStorage.shared.completeLocalSession(id: sessionId)
+                    completed += 1
+                }
+            }
+
+            log("TranscriptionRetryService: omi-local recovery completed \(completed), deleted \(deleted), skippedRecent \(skippedRecent)")
+        } catch {
+            logError("TranscriptionRetryService: omi-local recovery failed", error: error)
         }
     }
 

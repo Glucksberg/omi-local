@@ -117,6 +117,34 @@ actor TranscriptionStorage {
         log("TranscriptionStorage: Completed session \(id) (backendId: \(backendId))")
     }
 
+    /// Complete a session as a local-only conversation in omi-local mode.
+    /// This preserves recorded segments without sending anything to a backend.
+    func completeLocalSession(id: Int64) async throws {
+        let db = try await ensureInitialized()
+
+        try await db.write { database in
+            guard var record = try TranscriptionSessionRecord.fetchOne(database, key: id) else {
+                throw TranscriptionStorageError.sessionNotFound
+            }
+
+            let now = Date()
+            record.status = .completed
+            record.finishedAt = record.finishedAt ?? now
+            record.backendId = record.backendId ?? "local_session_\(id)"
+            record.backendSynced = true
+            record.conversationStatus = .completed
+            record.retryCount = 0
+            record.lastError = nil
+            if record.title?.isEmpty ?? true {
+                record.title = "Local Conversation"
+            }
+            record.updatedAt = now
+            try record.update(database)
+        }
+
+        log("TranscriptionStorage: Completed local session \(id)")
+    }
+
     /// Mark session as failed with error.
     /// No-op if the session is already completed (prevents race with concurrent completion).
     func markSessionFailed(id: Int64, error: String) async throws {

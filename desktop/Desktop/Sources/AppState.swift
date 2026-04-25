@@ -1596,6 +1596,22 @@ class AppState: ObservableObject {
     clearTranscriptionState()
     silentMicFallbackInProgress = false
 
+    if LocalMode.isEnabled {
+      Task {
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        if let sessionId = capturedSessionId {
+          do {
+            try await TranscriptionStorage.shared.completeLocalSession(id: sessionId)
+            log("Transcription: Completed local session \(sessionId)")
+          } catch {
+            logError("Transcription: Failed to complete local session \(sessionId)", error: error)
+          }
+        }
+        await loadConversations()
+      }
+      return
+    }
+
     // After WS close, the Python backend processes the conversation automatically.
     // Call force-process to ensure finalization and get the backend conversation ID.
     // This prevents the retry service from picking up the pendingUpload session.
@@ -1644,6 +1660,16 @@ class AppState: ObservableObject {
   /// Reconcile a local session by checking if a matching conversation exists on the backend.
   /// If found, marks the session as completed. Otherwise leaves it as pendingUpload for retry.
   private func reconcileSession(sessionId: Int64, startTime: Date) async {
+    guard !LocalMode.isEnabled else {
+      do {
+        try await TranscriptionStorage.shared.completeLocalSession(id: sessionId)
+        log("Transcription: Reconciled local session \(sessionId)")
+      } catch {
+        logError("Transcription: Failed to reconcile local session \(sessionId)", error: error)
+      }
+      return
+    }
+
     do {
       let conversations = try await APIClient.shared.getConversations(
         limit: 5,
@@ -1687,8 +1713,15 @@ class AppState: ObservableObject {
     // (backend will process it; memory_created event may arrive on the new session's WebSocket)
     if let sessionId = currentSessionId {
       do {
-        try await TranscriptionStorage.shared.finishSession(id: sessionId)
-        log("Transcription: Finished DB session \(sessionId) before reconnect")
+        if LocalMode.isEnabled {
+          try await TranscriptionStorage.shared.completeLocalSession(id: sessionId)
+          finishedSessionId = nil
+          finishedRecordingStartTime = nil
+          log("Transcription: Completed local DB session \(sessionId) before reconnect")
+        } else {
+          try await TranscriptionStorage.shared.finishSession(id: sessionId)
+          log("Transcription: Finished DB session \(sessionId) before reconnect")
+        }
       } catch {
         logError("Transcription: Failed to finish DB session \(sessionId)", error: error)
       }
@@ -1844,8 +1877,13 @@ class AppState: ObservableObject {
     if let sessionId = currentSessionId {
       Task {
         do {
-          try await TranscriptionStorage.shared.finishSession(id: sessionId)
-          log("Transcription: Finished DB session \(sessionId)")
+          if LocalMode.isEnabled {
+            try await TranscriptionStorage.shared.completeLocalSession(id: sessionId)
+            log("Transcription: Completed local DB session \(sessionId)")
+          } else {
+            try await TranscriptionStorage.shared.finishSession(id: sessionId)
+            log("Transcription: Finished DB session \(sessionId)")
+          }
         } catch {
           logError("Transcription: Failed to finish DB session \(sessionId)", error: error)
         }

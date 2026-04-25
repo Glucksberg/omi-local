@@ -187,6 +187,10 @@ class InsightStorage: ObservableObject {
     private func syncFromBackend() async {
         guard !isSyncing else { return }
 
+        guard !LocalMode.isEnabled else {
+            return
+        }
+
         // Don't sync if Firebase isn't configured yet (app still initializing)
         guard FirebaseApp.app() != nil else {
             log("Insight: Skipping sync - Firebase not configured yet")

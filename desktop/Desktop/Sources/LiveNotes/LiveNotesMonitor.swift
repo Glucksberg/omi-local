@@ -17,6 +17,7 @@ class LiveNotesMonitor: ObservableObject {
 
     /// Whether a note is currently being generated
     @Published private(set) var isGenerating: Bool = false
+    private var hasLoggedLocalAIDisabled = false
 
     /// Current recording session ID
     private var currentSessionId: Int64?
@@ -84,6 +85,18 @@ class LiveNotesMonitor: ObservableObject {
         currentSegmentOrder = 0
         lastProcessedSegmentEnd = nil
         existingNotesContext = []
+
+        if LocalMode.isEnabled && !LocalMode.isAIProxyEnabled {
+            isAiEnabled = false
+            if !hasLoggedLocalAIDisabled {
+                log("LiveNotesMonitor: omi-local AI notes paused until local AI proxy is configured")
+                hasLoggedLocalAIDisabled = true
+            }
+            Task {
+                await loadExistingNotes()
+            }
+            return
+        }
 
         // Initialize Gemini client if not already done
         if geminiClient == nil {

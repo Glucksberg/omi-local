@@ -27,6 +27,7 @@ public class ProactiveAssistantsPlugin: NSObject {
 
     private(set) var isMonitoring = false
     private var isStartingMonitoring = false  // Prevents race condition with async startMonitoring
+    private var hasLoggedLocalAIDisabled = false
     private var _hasScreenRecordingPermission: Bool?  // Cached permission state
     private var currentApp: String?
     private var currentWindowID: CGWindowID?
@@ -227,6 +228,15 @@ public class ProactiveAssistantsPlugin: NSObject {
         // Guard against both active monitoring and pending startup (race condition fix)
         guard !isMonitoring && !isStartingMonitoring else {
             completion(isMonitoring, nil)
+            return
+        }
+
+        if LocalMode.isEnabled && !LocalMode.isAIProxyEnabled {
+            if !hasLoggedLocalAIDisabled {
+                log("ProactiveAssistantsPlugin: omi-local screen analysis paused until local AI proxy is configured")
+                hasLoggedLocalAIDisabled = true
+            }
+            completion(false, "Local AI proxy is not configured")
             return
         }
 
