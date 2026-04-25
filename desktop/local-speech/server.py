@@ -8,6 +8,8 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 import wave
 from pathlib import Path
 from typing import Any
@@ -22,6 +24,68 @@ DEFAULT_CHANNELS = 1
 MAX_AUDIO_BYTES = int(os.environ.get("OMI_LOCAL_SPEECH_MAX_AUDIO_BYTES", str(20 * 1024 * 1024)))
 MAX_TTS_CHARS = int(os.environ.get("OMI_LOCAL_SPEECH_MAX_TTS_CHARS", "4000"))
 REQUIRE_LOOPBACK = os.environ.get("OMI_LOCAL_SPEECH_REQUIRE_LOOPBACK", "1") != "0"
+STARTED_AT = time.time()
+
+
+def env_flag(name: str) -> bool:
+  return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def env_int(name: str, default: int, minimum: int = 1) -> int:
+  raw = os.environ.get(name)
+  if not raw:
+    return default
+  try:
+    return max(minimum, int(raw))
+  except ValueError:
+    return default
+
+
+def env_float(name: str, default: float, minimum: float = 0.0) -> float:
+  raw = os.environ.get(name)
+  if not raw:
+    return default
+  try:
+    return max(minimum, float(raw))
+  except ValueError:
+    return default
+
+
+STT_MAX_CONCURRENCY = env_int("OMI_LOCAL_STT_MAX_CONCURRENCY", 1)
+TTS_MAX_CONCURRENCY = env_int("OMI_LOCAL_TTS_MAX_CONCURRENCY", 2)
+QUEUE_TIMEOUT_SECONDS = env_float("OMI_LOCAL_SPEECH_QUEUE_TIMEOUT_SECONDS", 10.0)
+WARMUP_ON_START = env_flag("OMI_LOCAL_SPEECH_WARMUP_ON_START")
+
+STT_SEMAPHORE = threading.BoundedSemaphore(STT_MAX_CONCURRENCY)
+TTS_SEMAPHORE = threading.BoundedSemaphore(TTS_MAX_CONCURRENCY)
+METRICS_LOCK = threading.Lock()
+METRICS: dict[str, dict[str, Any]] = {
+  "stt": {
+    "requests": 0,
+    "successes": 0,
+    "failures": 0,
+    "in_flight": 0,
+    "last_seconds": None,
+    "last_at": None,
+    "last_error": None,
+  },
+  "tts": {
+    "requests": 0,
+    "successes": 0,
+    "failures": 0,
+    "in_flight": 0,
+    "last_seconds": None,
+    "last_at": None,
+    "last_error": None,
+  },
+  "warmup": {
+    "attempted": False,
+    "ok": None,
+    "seconds": None,
+    "last_at": None,
+    "last_error": None,
+  },
+}
 
 app = FastAPI(title=APP_NAME)
 
@@ -79,6 +143,17 @@ def resolve_whisper_model() -> Path:
   return Path(os.environ.get("WHISPER_MODEL_PATH", str(default_model_path()))).expanduser()
 
 
+def model_metadata(path: Path) -> dict[str, Any]:
+  exists = path.exists()
+  stat = path.stat() if exists else None
+  return {
+    "path": str(path),
+    "exists": exists,
+    "size_bytes": stat.st_size if stat else None,
+    "modified_at": stat.st_mtime if stat else None,
+  }
+
+
 def normalize_language(language: str) -> str:
   language = (language or "auto").strip().lower()
   if language in {"multi", "auto", "detect"}:
@@ -118,7 +193,47 @@ def clean_whisper_text(text: str) -> str:
   return " ".join(lines).strip()
 
 
-def transcribe_audio(
+def mark_started(kind: str) -> None:
+  with METRICS_LOCK:
+    METRICS[kind]["requests"] += 1
+    METRICS[kind]["in_flight"] += 1
+
+
+def mark_finished(kind: str, started_at: float, error: Exception | None = None) -> None:
+  elapsed = round(time.perf_counter() - started_at, 4)
+  with METRICS_LOCK:
+    METRICS[kind]["in_flight"] = max(0, METRICS[kind]["in_flight"] - 1)
+    METRICS[kind]["last_seconds"] = elapsed
+    METRICS[kind]["last_at"] = time.time()
+    if error is None:
+      METRICS[kind]["successes"] += 1
+      METRICS[kind]["last_error"] = None
+    else:
+      METRICS[kind]["failures"] += 1
+      METRICS[kind]["last_error"] = str(error)
+
+
+def mark_warmup(ok: bool, started_at: float, error: Exception | None = None) -> None:
+  elapsed = round(time.perf_counter() - started_at, 4)
+  with METRICS_LOCK:
+    METRICS["warmup"]["attempted"] = True
+    METRICS["warmup"]["ok"] = ok
+    METRICS["warmup"]["seconds"] = elapsed
+    METRICS["warmup"]["last_at"] = time.time()
+    METRICS["warmup"]["last_error"] = str(error) if error else None
+
+
+def metrics_snapshot(kind: str) -> dict[str, Any]:
+  with METRICS_LOCK:
+    return dict(METRICS[kind])
+
+
+def acquire_slot(kind: str, semaphore: threading.BoundedSemaphore) -> None:
+  if not semaphore.acquire(timeout=QUEUE_TIMEOUT_SECONDS):
+    raise HTTPException(status_code=429, detail=f"{kind} queue is full")
+
+
+def transcribe_audio_unlocked(
   audio: bytes,
   language: str,
   sample_rate: int,
@@ -179,6 +294,26 @@ def transcribe_audio(
     return clean_whisper_text(result.stdout)
 
 
+def transcribe_audio(
+  audio: bytes,
+  language: str,
+  sample_rate: int,
+  channels: int,
+) -> str:
+  acquire_slot("stt", STT_SEMAPHORE)
+  started_at = time.perf_counter()
+  mark_started("stt")
+  try:
+    text = transcribe_audio_unlocked(audio, language, sample_rate, channels)
+    mark_finished("stt", started_at)
+    return text
+  except Exception as exc:
+    mark_finished("stt", started_at, exc)
+    raise
+  finally:
+    STT_SEMAPHORE.release()
+
+
 def audio_duration_seconds(audio: bytes, sample_rate: int, channels: int) -> float:
   if sample_rate <= 0 or channels <= 0:
     return 0
@@ -211,29 +346,45 @@ def transcript_segment(
 
 
 def run_say_tts(text: str) -> bytes:
+  acquire_slot("tts", TTS_SEMAPHORE)
+  started_at = time.perf_counter()
+  mark_started("tts")
   say_bin = shutil.which("say") or "/usr/bin/say"
-  if not Path(say_bin).exists():
-    raise HTTPException(status_code=503, detail="macOS say binary not found")
+  try:
+    if not Path(say_bin).exists():
+      raise HTTPException(status_code=503, detail="macOS say binary not found")
 
-  with tempfile.TemporaryDirectory(prefix="omi-tts-") as tmp:
-    output_path = Path(tmp) / "speech.aiff"
-    args = [
-      say_bin,
-      "-o",
-      str(output_path),
-    ]
-    voice = os.environ.get("OMI_LOCAL_TTS_VOICE")
-    if voice:
-      args.extend(["-v", voice])
-    rate = os.environ.get("OMI_LOCAL_TTS_RATE")
-    if rate:
-      args.extend(["-r", rate])
-    args.append(text)
-    result = subprocess.run(args, capture_output=True, text=True, timeout=60, check=False)
-    if result.returncode != 0:
-      stderr = result.stderr.strip()[-1200:]
-      raise HTTPException(status_code=500, detail=f"say failed: {stderr}")
-    return output_path.read_bytes()
+    with tempfile.TemporaryDirectory(prefix="omi-tts-") as tmp:
+      output_path = Path(tmp) / "speech.aiff"
+      args = [
+        say_bin,
+        "-o",
+        str(output_path),
+      ]
+      voice = os.environ.get("OMI_LOCAL_TTS_VOICE")
+      if voice:
+        args.extend(["-v", voice])
+      rate = os.environ.get("OMI_LOCAL_TTS_RATE")
+      if rate:
+        args.extend(["-r", rate])
+      args.append(text)
+      result = subprocess.run(args, capture_output=True, text=True, timeout=60, check=False)
+      if result.returncode != 0:
+        stderr = result.stderr.strip()[-1200:]
+        raise HTTPException(status_code=500, detail=f"say failed: {stderr}")
+      audio = output_path.read_bytes()
+      mark_finished("tts", started_at)
+      return audio
+  except Exception as exc:
+    mark_finished("tts", started_at, exc)
+    raise
+  finally:
+    TTS_SEMAPHORE.release()
+
+
+def silent_audio(seconds: float = 0.25) -> bytes:
+  frame_count = int(DEFAULT_SAMPLE_RATE * DEFAULT_CHANNELS * seconds)
+  return b"\0\0" * frame_count
 
 
 async def flush_websocket_audio(
@@ -257,25 +408,67 @@ async def flush_websocket_audio(
     await websocket.send_text(json.dumps({"type": "error", "message": str(exc)}))
 
 
+async def run_warmup(language: str = "en") -> dict[str, Any]:
+  started_at = time.perf_counter()
+  try:
+    text = await asyncio.to_thread(
+      transcribe_audio,
+      silent_audio(),
+      language,
+      DEFAULT_SAMPLE_RATE,
+      DEFAULT_CHANNELS,
+    )
+    mark_warmup(True, started_at)
+    return {"ok": True, "seconds": metrics_snapshot("warmup")["seconds"], "transcript": text}
+  except Exception as exc:
+    mark_warmup(False, started_at, exc)
+    raise
+
+
+@app.on_event("startup")
+async def warmup_on_start() -> None:
+  if WARMUP_ON_START:
+    asyncio.create_task(run_warmup())
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
   whisper_bin = resolve_whisper_binary()
   whisper_model = resolve_whisper_model()
+  say_bin = shutil.which("say") or "/usr/bin/say"
   return {
     "ok": True,
     "service": APP_NAME,
+    "uptime_seconds": round(time.time() - STARTED_AT, 3),
+    "config": {
+      "loopback_required": REQUIRE_LOOPBACK,
+      "max_audio_bytes": MAX_AUDIO_BYTES,
+      "max_tts_chars": MAX_TTS_CHARS,
+      "stt_max_concurrency": STT_MAX_CONCURRENCY,
+      "tts_max_concurrency": TTS_MAX_CONCURRENCY,
+      "queue_timeout_seconds": QUEUE_TIMEOUT_SECONDS,
+      "warmup_on_start": WARMUP_ON_START,
+    },
     "stt": {
       "provider": "whisper.cpp",
       "binary": whisper_bin,
       "binary_exists": bool(whisper_bin and Path(whisper_bin).exists()),
-      "model": str(whisper_model),
-      "model_exists": whisper_model.exists(),
+      "model": model_metadata(whisper_model),
+      "metrics": metrics_snapshot("stt"),
     },
     "tts": {
       "provider": "macos-say",
-      "binary": shutil.which("say") or "/usr/bin/say",
+      "binary": say_bin,
+      "binary_exists": Path(say_bin).exists(),
+      "metrics": metrics_snapshot("tts"),
     },
+    "warmup": metrics_snapshot("warmup"),
   }
+
+
+@app.post("/warmup")
+async def warmup(language: str = Query("en")) -> dict[str, Any]:
+  return await run_warmup(language=language)
 
 
 @app.post("/v2/voice-message/transcribe")

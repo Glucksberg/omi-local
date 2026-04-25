@@ -109,11 +109,14 @@ Run:
 ```bash
 ./scripts/run-local-speech.sh
 curl -s http://127.0.0.1:10202/health | jq
+./scripts/benchmark-local-speech.sh
 ```
 
-STT uses `whisper.cpp` and the model pointed to by `WHISPER_MODEL_PATH`.
-TTS uses macOS `say` through the same loopback service. This is intentionally
-simple and deterministic; Kokoro or Qwen TTS can be added later behind the same
+STT uses `whisper.cpp` and the model pointed to by `WHISPER_MODEL_PATH`. The
+current path starts `whisper-cli` per request, so the model is not process
+resident; `/warmup` is available to warm filesystem cache before tests. TTS uses
+macOS `say` through the same loopback service. This is intentionally simple and
+deterministic; Kokoro or Qwen TTS can be added later behind the same
 `/v1/tts/synthesize` route without changing the app.
 
 ## Sync-Friendly Patch Rules

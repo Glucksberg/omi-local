@@ -47,6 +47,7 @@ scripts/*
 !scripts/setup-local-speech.sh
 !scripts/run-local-speech.sh
 !scripts/install-local-speech-launch-agent.sh
+!scripts/benchmark-local-speech.sh
 
 # Swift compiler diagnostics cache
 *.dia
