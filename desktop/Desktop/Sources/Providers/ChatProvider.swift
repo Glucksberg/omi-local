@@ -606,6 +606,7 @@ A screenshot may be attached — use it silently only if relevant. Never mention
     private var aiProfileLoaded = false
     private var cachedDatabaseSchema: String = ""
     private var schemaLoaded = false
+    private var cachedTomMemoryBootstrapSection: String = ""
     /// System prompt built once at warmup and reused for every query.
     /// The ACP session is pre-warmed with this prompt via session/new.
     /// On subsequent queries the bridge reuses the same session, so the
@@ -888,6 +889,18 @@ A screenshot may be attached — use it silently only if relevant. Never mention
         await loadTasksIfNeeded()
         await loadAIProfileIfNeeded()
         await loadSchemaIfNeeded()
+        loadTomMemoryBootstrapIfNeeded()
+    }
+
+    /// Loads OpenClaw-style TomMemory bootstrap files from the local Markdown vault.
+    /// This is intentionally separate from SQLite memories: TomMemory is the provisional
+    /// human-readable canon, while SQLite remains sensor/cache context.
+    private func loadTomMemoryBootstrapIfNeeded() {
+        guard cachedTomMemoryBootstrapSection.isEmpty else { return }
+        cachedTomMemoryBootstrapSection = TomMemoryBootstrapService.shared.buildPromptSection()
+        if !cachedTomMemoryBootstrapSection.isEmpty {
+            log("ChatProvider loaded TomMemory bootstrap (\(cachedTomMemoryBootstrapSection.count) chars)")
+        }
     }
 
     /// Switch between bridge modes (Omi AI via piMono, or user's Claude OAuth)
@@ -1588,6 +1601,13 @@ A screenshot may be attached — use it silently only if relevant. Never mention
             databaseSchema: cachedDatabaseSchema
         )
 
+        // Inject TomMemory bootstrap files using the OpenClaw-style workspace pattern.
+        // These files are applied at session creation time, so edits to SOUL.md/MEMORY.md
+        // require a bridge/session restart before the model sees them.
+        if !cachedTomMemoryBootstrapSection.isEmpty {
+            prompt += "\n\n" + cachedTomMemoryBootstrapSection
+        }
+
         // Inject conversation history so the new ACP session has context from before app launch.
         // The ACP SDK maintains history natively after this via session/prompt — this only matters
         // at session creation time.
@@ -1625,7 +1645,7 @@ A screenshot may be attached — use it silently only if relevant. Never mention
         let historyInjected = !history.isEmpty
         let historyMessages = messages.filter { !$0.text.isEmpty && !$0.isStreaming }
         let historyCount = min(historyMessages.count, 20)
-        log("ChatProvider: prompt built — schema: \(!cachedDatabaseSchema.isEmpty ? "yes" : "no"), goals: \(activeGoalCount), tasks: \(cachedTasks.count), ai_profile: \(!cachedAIProfile.isEmpty ? "yes" : "no"), memories: \(cachedMemories.count), history: \(historyInjected ? "injected (\(historyCount) msgs)" : "none"), claude_md: \(claudeMdEnabled && claudeMdContent != nil ? "yes" : "no"), project_claude_md: \(projectClaudeMdEnabled && projectClaudeMdContent != nil ? "yes" : "no"), skills: \(enabledSkillNames.count), dev_mode_in_skills: \(devModeEnabled && devModeContext != nil ? "yes" : "no"), prompt_length: \(prompt.count) chars")
+        log("ChatProvider: prompt built — schema: \(!cachedDatabaseSchema.isEmpty ? "yes" : "no"), goals: \(activeGoalCount), tasks: \(cachedTasks.count), ai_profile: \(!cachedAIProfile.isEmpty ? "yes" : "no"), memories: \(cachedMemories.count), tom_memory: \(!cachedTomMemoryBootstrapSection.isEmpty ? "yes" : "no"), history: \(historyInjected ? "injected (\(historyCount) msgs)" : "none"), claude_md: \(claudeMdEnabled && claudeMdContent != nil ? "yes" : "no"), project_claude_md: \(projectClaudeMdEnabled && projectClaudeMdContent != nil ? "yes" : "no"), skills: \(enabledSkillNames.count), dev_mode_in_skills: \(devModeEnabled && devModeContext != nil ? "yes" : "no"), prompt_length: \(prompt.count) chars")
 
         // Log per-section character breakdown
         let baseTemplate = ChatPromptBuilder.buildDesktopChat(
@@ -1641,6 +1661,7 @@ A screenshot may be attached — use it silently only if relevant. Never mention
             "tasks:\(tasksSection.count)c, " +
             "ai_profile:\(aiProfileSection.count)c, " +
             "schema:\(cachedDatabaseSchema.count)c, " +
+            "tom_memory:\(cachedTomMemoryBootstrapSection.count)c, " +
             "history:\(history.count)c, " +
             "claude_md:\(claudeMdContent?.count ?? 0)c, " +
             "project_claude_md:\(projectClaudeMdContent?.count ?? 0)c, " +
@@ -1665,6 +1686,11 @@ A screenshot may be attached — use it silently only if relevant. Never mention
             aiProfileSection: aiProfileSection,
             databaseSchema: cachedDatabaseSchema
         )
+
+        loadTomMemoryBootstrapIfNeeded()
+        if !cachedTomMemoryBootstrapSection.isEmpty {
+            prompt += "\n\n" + cachedTomMemoryBootstrapSection
+        }
 
         // NO conversation_history — SDK handles this via resume
 
