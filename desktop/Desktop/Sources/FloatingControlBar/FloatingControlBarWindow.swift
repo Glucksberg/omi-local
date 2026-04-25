@@ -1633,9 +1633,11 @@ class FloatingControlBarManager {
                 }
             }
 
-        let floatingModel = ShortcutSettings.shared.selectedModel.isEmpty
-            ? ModelQoS.Claude.defaultSelection
-            : ShortcutSettings.shared.selectedModel
+        let floatingModel = LocalMode.isRemoteLLMEnabled
+            ? LocalMode.remoteLLMModel
+            : (ShortcutSettings.shared.selectedModel.isEmpty
+                ? ModelQoS.Claude.defaultSelection
+                : ShortcutSettings.shared.selectedModel)
         let notificationContextSuffix = notificationContextSuffixIfNeeded(for: message)
         await provider.sendMessage(
             message,
