@@ -16,7 +16,8 @@ cd desktop
 production app bundle.
 
 By default, `run-local.sh` also starts `scripts/run-local-speech.sh` on
-`127.0.0.1:10202` for local STT/TTS. Disable that with
+`127.0.0.1:10202` for local STT/TTS. The local API runs separately on
+`127.0.0.1:10201` through a LaunchAgent. Disable speech autostart with
 `OMI_LOCAL_SPEECH_AUTOSTART=0`.
 
 ## LLM Exception
@@ -115,9 +116,29 @@ curl -s http://127.0.0.1:10202/health | jq
 STT uses `whisper.cpp` and the model pointed to by `WHISPER_MODEL_PATH`. The
 current path starts `whisper-cli` per request, so the model is not process
 resident; `/warmup` is available to warm filesystem cache before tests. TTS uses
-macOS `say` through the same loopback service. This is intentionally simple and
-deterministic; Kokoro or Qwen TTS can be added later behind the same
-`/v1/tts/synthesize` route without changing the app.
+Kokoro ONNX when configured, with macOS `say` as the deterministic fallback.
+
+## Local API
+
+Setup:
+
+```bash
+cd desktop
+./scripts/install-local-api-launch-agent.sh
+```
+
+The LaunchAgent runs `scripts/run-local-api.sh`, which serves
+`127.0.0.1:10201` and stores chat/session data in:
+
+```text
+~/Library/Application Support/Omi Local/local-api/omi-local.db
+```
+
+Implemented local routes currently cover desktop chat persistence,
+chat-session CRUD, initial chat greeting, simple title generation, LLM usage
+accounting, API-key discovery stubs, and Crisp unread stubs. In local mode the
+Conversations page uses the app's existing SQLite cache and skips remote API
+refreshes.
 
 ## Sync-Friendly Patch Rules
 
@@ -132,9 +153,9 @@ deterministic; Kokoro or Qwen TTS can be added later behind the same
 
 ## Remaining Work
 
-1. Local API service on `127.0.0.1:10201` implementing the desktop/Python routes
-   the app expects.
-2. Replace the basic local speech bridge with higher-quality providers where
+1. Broaden the local API beyond chat/session routes as more app surfaces move
+   from cache-only to fully local CRUD.
+2. Replace or tune local speech providers where
    needed: Whisper medium/large for STT, Kokoro/Qwen for TTS.
 3. Local embedding proxy with the app's existing proxy route shape, wired to
    `OMI_LOCAL_AI_PROXY_URL`.
@@ -149,6 +170,8 @@ deterministic; Kokoro or Qwen TTS can be added later behind the same
 ```bash
 xcrun swift build -c debug --package-path Desktop
 npm --prefix agent run build
+./scripts/install-local-api-launch-agent.sh
+curl -s http://127.0.0.1:10201/health | jq
 ./scripts/run-local-speech.sh
 curl -s http://127.0.0.1:10202/health | jq
 ./run-local.sh

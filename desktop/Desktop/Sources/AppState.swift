@@ -1932,6 +1932,16 @@ class AppState: ObservableObject {
       // Continue to API fetch even if local fails
     }
 
+    if LocalMode.isEnabled {
+      if conversations.isEmpty {
+        totalConversationsCount = 0
+      }
+      log("Conversations: omi-local mode using local cache only; skipping API refresh")
+      isLoadingConversations = false
+      NotificationCenter.default.post(name: .conversationsPageDidLoad, object: nil)
+      return
+    }
+
     // Step 2: Fetch from API in background to get fresh data
     // Calculate date range if date filter is set
     let startDate: Date?
