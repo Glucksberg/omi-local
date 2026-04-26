@@ -180,6 +180,9 @@ struct SettingsContentView: View {
   // Downgrade confirmation alert
   @State private var showDowngradeAlert = false
 
+  // Heartbeat settings
+  @ObservedObject private var heartbeatSettings = HeartbeatSettings.shared
+
   // Tier gating (0 = show all, 1-6 = sequential tiers)
   @AppStorage("currentTierLevel") private var currentTierLevel = 0
 
@@ -492,9 +495,6 @@ struct SettingsContentView: View {
       .animation(.easeInOut(duration: 0.15), value: selectedSection)
     }
     .onAppear {
-      if selectedSection == .aiChat {
-        selectedSection = .advanced
-      }
       loadBackendSettings()
       loadSubscriptionInfo()
       // Sync transcription state with appState
@@ -517,10 +517,6 @@ struct SettingsContentView: View {
       isTranscribing = newValue
     }
     .onChange(of: selectedSection) { _, newValue in
-      if newValue == .aiChat {
-        selectedSection = .advanced
-        return
-      }
       if newValue == .planUsage {
         loadSubscriptionInfo()
       }
@@ -2431,6 +2427,70 @@ struct SettingsContentView: View {
           )
           .scaledFont(size: 12)
           .foregroundColor(OmiColors.textTertiary)
+        }
+      }
+
+      // Heartbeats card
+      settingsCard(settingId: "aichat.heartbeats") {
+        VStack(alignment: .leading, spacing: 12) {
+          HStack {
+            Image(systemName: "heart.text.square")
+              .scaledFont(size: 16)
+              .foregroundColor(OmiColors.textTertiary)
+
+            VStack(alignment: .leading, spacing: 2) {
+              Text("Heartbeats")
+                .scaledFont(size: 15, weight: .semibold)
+                .foregroundColor(OmiColors.textPrimary)
+              Text("Let Tom periodically check HEARTBEAT.md and alert only when something matters.")
+                .scaledFont(size: 12)
+                .foregroundColor(OmiColors.textTertiary)
+            }
+
+            Spacer()
+
+            Toggle("", isOn: $heartbeatSettings.isEnabled)
+              .toggleStyle(.switch)
+              .controlSize(.small)
+              .labelsHidden()
+              .onChange(of: heartbeatSettings.isEnabled) { _, _ in
+                HeartbeatScheduler.shared.reconcile(reason: "settings_toggle")
+              }
+          }
+
+          if heartbeatSettings.isEnabled {
+            Divider()
+
+            HStack {
+              VStack(alignment: .leading, spacing: 2) {
+                Text("Interval")
+                  .scaledFont(size: 14)
+                  .foregroundColor(OmiColors.textSecondary)
+                Text("How often Tom gets a scheduled background turn")
+                  .scaledFont(size: 12)
+                  .foregroundColor(OmiColors.textTertiary)
+              }
+
+              Spacer()
+
+              Picker("", selection: $heartbeatSettings.intervalMinutes) {
+                ForEach(HeartbeatSettings.allowedIntervalsMinutes, id: \.self) { minutes in
+                  Text(minutes < 60 ? "\(minutes) min" : "\(minutes / 60) h").tag(minutes)
+                }
+              }
+              .pickerStyle(.menu)
+              .frame(width: 120)
+              .onChange(of: heartbeatSettings.intervalMinutes) { _, _ in
+                HeartbeatScheduler.shared.reconcile(reason: "settings_interval")
+              }
+
+              Button("Run Now") {
+                HeartbeatScheduler.shared.runNow()
+              }
+              .buttonStyle(.bordered)
+              .controlSize(.small)
+            }
+          }
         }
       }
 

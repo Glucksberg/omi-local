@@ -210,6 +210,9 @@ struct DesktopHomeView: View {
                 FloatingControlBarManager.shared.show()
               }
 
+              // Start Tom/OpenClaw-style heartbeats if enabled.
+              HeartbeatScheduler.shared.configure(chatProvider: viewModelContainer.chatProvider)
+
               // Set up push-to-talk voice input
               if let barState = FloatingControlBarManager.shared.barState {
                 PushToTalkManager.shared.setup(barState: barState)

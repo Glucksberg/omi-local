@@ -217,6 +217,10 @@ struct SettingsSearchItem: Identifiable {
       keywords: ["workspace", "project", "directory", "folder", "working directory"],
       section: .advanced, icon: "cpu", settingId: "aichat.workspace"),
     SettingsSearchItem(
+      name: "Heartbeats", subtitle: "Let Tom check in periodically like OpenClaw",
+      keywords: ["heartbeat", "openclaw", "scheduled", "background", "tom", "agent"],
+      section: .aiChat, icon: "heart.text.square", settingId: "aichat.heartbeats"),
+    SettingsSearchItem(
       name: "Browser Extension",
       subtitle: "Lets the AI use your Chrome browser with all your logged-in sessions",
       keywords: [
@@ -324,6 +328,7 @@ struct SettingsSidebar: View {
     .privacy,
     .account,
     .planUsage,
+    .aiChat,
     .floatingBar,
     .shortcuts,
     .advanced,
@@ -517,39 +522,33 @@ struct SettingsSidebarItem: View {
   }
 
   var body: some View {
-    Group {
-      if section == .aiChat {
-        EmptyView()
-      } else {
-        Button(action: onTap) {
-          HStack(spacing: 12) {
-            Image(systemName: icon)
-              .scaledFont(size: 17)
-              .foregroundColor(isSelected ? OmiColors.textPrimary : OmiColors.textTertiary)
-              .frame(width: iconWidth)
+    Button(action: onTap) {
+      HStack(spacing: 12) {
+        Image(systemName: icon)
+          .scaledFont(size: 17)
+          .foregroundColor(isSelected ? OmiColors.textPrimary : OmiColors.textTertiary)
+          .frame(width: iconWidth)
 
-            Text(section.rawValue)
-              .scaledFont(size: 14, weight: isSelected ? .medium : .regular)
-              .foregroundColor(isSelected ? OmiColors.textPrimary : OmiColors.textSecondary)
+        Text(section.rawValue)
+          .scaledFont(size: 14, weight: isSelected ? .medium : .regular)
+          .foregroundColor(isSelected ? OmiColors.textPrimary : OmiColors.textSecondary)
 
-            Spacer()
-          }
-          .padding(.horizontal, 12)
-          .padding(.vertical, 11)
-          .contentShape(Rectangle())
-          .background(
-            RoundedRectangle(cornerRadius: 10)
-              .fill(
-                isSelected
-                  ? OmiColors.backgroundTertiary.opacity(0.8)
-                  : (isHovered ? OmiColors.backgroundTertiary.opacity(0.5) : Color.clear))
-          )
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-          isHovered = hovering
-        }
+        Spacer()
       }
+      .padding(.horizontal, 12)
+      .padding(.vertical, 11)
+      .contentShape(Rectangle())
+      .background(
+        RoundedRectangle(cornerRadius: 10)
+          .fill(
+            isSelected
+              ? OmiColors.backgroundTertiary.opacity(0.8)
+              : (isHovered ? OmiColors.backgroundTertiary.opacity(0.5) : Color.clear))
+      )
+    }
+    .buttonStyle(.plain)
+    .onHover { hovering in
+      isHovered = hovering
     }
   }
 }

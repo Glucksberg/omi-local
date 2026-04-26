@@ -2287,6 +2287,73 @@ A screenshot may be attached — use it silently only if relevant. Never mention
 
     // MARK: - Send Message
 
+    /// Run a headless OpenClaw-style heartbeat turn.
+    ///
+    /// This does not append chat UI messages and does not persist messages. The scheduler
+    /// decides whether to drop HEARTBEAT_OK or surface the returned alert.
+    func runHeartbeatTurn() async throws -> String {
+        guard !isSending else {
+            log("ChatProvider: heartbeat skipped because a user query is in progress")
+            return "HEARTBEAT_OK"
+        }
+
+        guard await ensureBridgeStarted() else {
+            throw BridgeError.notRunning
+        }
+
+        var systemPrompt = cachedMainSystemPrompt
+        systemPrompt += """
+
+<heartbeat_run>
+You are running a scheduled heartbeat for Markus.
+Read `/Users/markus/Documents/Omi/TomMemory/HEARTBEAT.md` if needed and follow it strictly.
+Use lightweight context. Do not repeat old alerts. Do not invent tasks.
+If nothing needs Markus's attention, reply exactly `HEARTBEAT_OK`.
+If something matters, reply with one concise alert in Brazilian Portuguese, max 500 chars.
+Never perform destructive actions, sends, purchases, credential changes, or production restarts during heartbeat.
+</heartbeat_run>
+"""
+
+        let prompt = """
+Read HEARTBEAT.md if it exists. Check only safe, useful background context. If nothing needs attention, reply HEARTBEAT_OK. Otherwise return one concise alert for Markus.
+"""
+
+        let queryResult = try await agentBridge.query(
+            prompt: prompt,
+            systemPrompt: systemPrompt,
+            sessionKey: "heartbeat",
+            cwd: workingDirectory,
+            mode: "ask",
+            model: modelOverride,
+            resume: nil,
+            imageData: nil,
+            onTextDelta: { _ in },
+            onToolCall: { _, name, input in
+                let toolCall = ToolCall(name: name, arguments: input, thoughtSignature: nil)
+                return await ChatToolExecutor.execute(toolCall)
+            },
+            onToolActivity: { name, status, _, _ in
+                log("ChatProvider heartbeat tool \(name) \(status)")
+            },
+            onThinkingDelta: { _ in },
+            onToolResultDisplay: { _, _, _ in },
+            onAuthRequired: { [weak self] _, _ in
+                Task { @MainActor [weak self] in
+                    self?.isClaudeAuthRequired = true
+                }
+            },
+            onAuthSuccess: { [weak self] in
+                Task { @MainActor [weak self] in
+                    self?.isClaudeAuthRequired = false
+                    self?.checkClaudeConnectionStatus()
+                }
+            }
+        )
+
+        log("ChatProvider: heartbeat response complete")
+        return queryResult.text
+    }
+
     /// Send a message and get AI response via Claude Agent SDK bridge
     /// Persists both user and AI messages to backend
     /// - Parameters:
