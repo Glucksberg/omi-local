@@ -2388,11 +2388,12 @@ A screenshot may be attached — use it silently only if relevant. Never mention
         let memoryWriteInstructions = heartbeatSettings.allowMemoryWrites
             ? """
 You may consolidate durable memories by creating or updating Markdown files under `\(memoryDirectory)` only.
+Bash is blocked during heartbeat. Use read/grep/find/ls and Omi read-only tools for context.
 Prefer the write/edit tools for memory files. Do not use shell redirection for memory writes.
 Never write outside `\(memoryDirectory)`.
 """
             : """
-Memory file writes are disabled for this heartbeat. Read context only and return an alert or HEARTBEAT_OK.
+Memory file writes are disabled for this heartbeat. Bash is blocked. Read context only and return an alert or HEARTBEAT_OK.
 """
 
         var systemPrompt = cachedMainSystemPrompt

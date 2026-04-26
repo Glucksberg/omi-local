@@ -303,47 +303,10 @@ const HEARTBEAT_MUTATING_TOOL_NAMES = new Set([
   "update_action_item",
 ]);
 
-const HEARTBEAT_BASH_MUTATION_RULES: DenyRule[] = [
-  {
-    pattern: />>?/,
-    reason:
-      "Heartbeat shell commands are read-only. Use write/edit under TomMemory for memory updates.",
-  },
-  {
-    pattern:
-      /(?:^|[\n;&|`(]|\$\()\s*(?:rm|mv|cp|mkdir|rmdir|touch|chmod|chown|chgrp|ln|install|truncate|tee)\b/,
-    reason:
-      "Heartbeat shell commands are read-only. Use write/edit under TomMemory for memory updates.",
-  },
-  {
-    pattern: /\b(?:sed\s+-i|perl\s+-pi)\b/,
-    reason:
-      "In-place shell edits are blocked during heartbeat. Use edit under TomMemory for memory updates.",
-  },
-  {
-    pattern:
-      /(?:^|[\n;&|`(]|\$\()\s*(?:python3?|node|ruby|perl|osascript)\s+(?:-c|-e|-pi)\b/,
-    reason:
-      "Inline script execution is blocked during heartbeat because it can mutate arbitrary files.",
-  },
-  {
-    pattern:
-      /\b(?:brew|npm|pnpm|yarn|pipx?|uv|cargo|go)\s+(?:add|i|install|remove|uninstall|update|upgrade)\b/,
-    reason:
-      "Package installation or updates are blocked during heartbeat.",
-  },
-  {
-    pattern:
-      /\bgit\s+(?:add|branch|checkout|clean|commit|merge|pull|push|rebase|reset|restore|stash|switch|tag)\b/,
-    reason:
-      "Git mutations are blocked during heartbeat. Use read-only git commands such as status, diff, log, or show.",
-  },
-  {
-    pattern: /\b(?:defaults\s+write|launchctl)\b/,
-    reason:
-      "System or app setting changes are blocked during heartbeat.",
-  },
-];
+const HEARTBEAT_BASH_BLOCK_REASON =
+  "Bash is blocked during heartbeat because shell commands cannot be made " +
+  "reliably read-only. Use read/grep/find/ls or Omi read-only tools for " +
+  "context, and write/edit under TomMemory for memory updates.";
 
 function expandHome(filePath: string): string {
   if (filePath === "~") return homedir();
@@ -367,15 +330,9 @@ function isHeartbeatMode(): boolean {
   return process.env.OMI_HEARTBEAT_MODE === "1";
 }
 
-export function heartbeatMutatingBashDecision(command: string): DenyDecision | null {
+export function heartbeatBashDecision(command: string): DenyDecision | null {
   if (typeof command !== "string" || command.length === 0) return null;
-  const normalized = normalizeBashCommand(command);
-  for (const rule of HEARTBEAT_BASH_MUTATION_RULES) {
-    if (rule.pattern.test(normalized)) {
-      return { blocked: true, reason: rule.reason };
-    }
-  }
-  return null;
+  return { blocked: true, reason: HEARTBEAT_BASH_BLOCK_REASON };
 }
 
 function inspectHeartbeatToolCall(event: ToolCallEvent): DenyDecision | null {
@@ -384,7 +341,7 @@ function inspectHeartbeatToolCall(event: ToolCallEvent): DenyDecision | null {
   switch (event.toolName) {
     case "bash": {
       const command = (event.input as { command?: unknown })?.command;
-      return typeof command === "string" ? heartbeatMutatingBashDecision(command) : null;
+      return typeof command === "string" ? heartbeatBashDecision(command) : null;
     }
     case "write":
     case "edit":

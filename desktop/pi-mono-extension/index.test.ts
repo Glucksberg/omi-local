@@ -1075,7 +1075,7 @@ test("inspectToolCall: heartbeat blocks memory writes when disabled", () => {
   );
 });
 
-test("inspectToolCall: heartbeat allows read-only bash", () => {
+test("inspectToolCall: heartbeat blocks all bash", () => {
   withPatchedEnv(
     {
       OMI_HEARTBEAT_MODE: "1",
@@ -1083,9 +1083,15 @@ test("inspectToolCall: heartbeat allows read-only bash", () => {
       OMI_HEARTBEAT_MEMORY_DIR: pathJoin(tmpdir(), "omi-tom-memory-test"),
     },
     () => {
-      assert.equal(inspectToolCall(bashEvent("ls -la")), null);
-      assert.equal(inspectToolCall(bashEvent("cat ~/Documents/Omi/TomMemory/HEARTBEAT.md")), null);
-      assert.equal(inspectToolCall(bashEvent("git status --short")), null);
+      for (const command of [
+        "ls -la",
+        "cat ~/Documents/Omi/TomMemory/HEARTBEAT.md",
+        "git status --short",
+      ]) {
+        const d = inspectToolCall(bashEvent(command));
+        assert.ok(d, `expected deny: ${command}`);
+        assert.match(d!.reason, /Bash is blocked during heartbeat/);
+      }
     },
   );
 });
@@ -1101,15 +1107,15 @@ test("inspectToolCall: heartbeat blocks mutating bash", () => {
     () => {
       const redirect = inspectToolCall(bashEvent(`echo hi > "${memoryFile}"`));
       assert.ok(redirect);
-      assert.match(redirect!.reason, /read-only/);
+      assert.match(redirect!.reason, /Bash is blocked during heartbeat/);
 
       const mkdir = inspectToolCall(bashEvent("mkdir -p ~/Documents/Omi/TomMemory/daily"));
       assert.ok(mkdir);
-      assert.match(mkdir!.reason, /read-only/);
+      assert.match(mkdir!.reason, /Bash is blocked during heartbeat/);
 
       const inline = inspectToolCall(bashEvent("python3 -c 'open(\"x\", \"w\").write(\"x\")'"));
       assert.ok(inline);
-      assert.match(inline!.reason, /Inline script/);
+      assert.match(inline!.reason, /Bash is blocked during heartbeat/);
     },
   );
 });
