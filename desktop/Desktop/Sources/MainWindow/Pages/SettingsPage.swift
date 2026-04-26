@@ -2563,6 +2563,16 @@ struct SettingsContentView: View {
                 .foregroundColor(OmiColors.textTertiary)
                 .lineLimit(1)
                 .truncationMode(.middle)
+
+              Text("Run log")
+                .scaledFont(size: 11, weight: .medium)
+                .foregroundColor(OmiColors.textTertiary)
+                .padding(.top, 4)
+              Text(heartbeatSettings.runLogFilePath)
+                .scaledFont(size: 11, design: .monospaced)
+                .foregroundColor(OmiColors.textTertiary)
+                .lineLimit(1)
+                .truncationMode(.middle)
             }
           }
         }

@@ -53,6 +53,10 @@ final class HeartbeatSettings: ObservableObject {
     URL(fileURLWithPath: memoryDirectory).appendingPathComponent("HEARTBEAT.md").path
   }
 
+  var runLogFilePath: String {
+    URL(fileURLWithPath: memoryDirectory).appendingPathComponent("HEARTBEAT_LOG.md").path
+  }
+
   private init() {
     isEnabled = UserDefaults.standard.object(forKey: Keys.enabled) as? Bool ?? false
     let storedInterval = UserDefaults.standard.integer(forKey: Keys.intervalMinutes)

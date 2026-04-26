@@ -2,6 +2,80 @@ import SwiftUI
 import Combine
 import GRDB
 
+struct HeartbeatTurnResult {
+    let text: String
+    let toolActivities: [HeartbeatToolActivity]
+    let costUsd: Double
+    let inputTokens: Int
+    let outputTokens: Int
+}
+
+struct HeartbeatToolActivity: Sendable {
+    let name: String
+    let status: String
+    let inputSummary: String?
+}
+
+private final class HeartbeatToolActivityRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var activities: [HeartbeatToolActivity] = []
+
+    func record(name: String, status: String, input: [String: Any]?) {
+        let activity = HeartbeatToolActivity(
+            name: name,
+            status: status,
+            inputSummary: Self.summarize(name: name, input: input)
+        )
+        lock.lock()
+        activities.append(activity)
+        lock.unlock()
+    }
+
+    func snapshot() -> [HeartbeatToolActivity] {
+        lock.lock()
+        defer { lock.unlock() }
+        return activities
+    }
+
+    private static func summarize(name: String, input: [String: Any]?) -> String? {
+        guard let input else { return nil }
+
+        let value: String?
+        switch name {
+        case "bash":
+            value = input["command"] as? String
+        case "read", "write", "edit", "edit-diff", "ls":
+            value = input["path"] as? String
+        case "grep", "find":
+            let pattern = input["pattern"] as? String ?? ""
+            let path = input["path"] as? String ?? "."
+            value = pattern.isEmpty ? path : "\(pattern) @ \(path)"
+        case "execute_sql":
+            value = input["query"] as? String
+        case "semantic_search", "search_tasks", "search_conversations", "search_memories":
+            value = input["query"] as? String
+        default:
+            if JSONSerialization.isValidJSONObject(input),
+               let data = try? JSONSerialization.data(withJSONObject: input, options: [.sortedKeys]),
+               let json = String(data: data, encoding: .utf8)
+            {
+                value = json
+            } else {
+                value = nil
+            }
+        }
+
+        guard let value else { return nil }
+        let normalized = value
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\t", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return nil }
+        if normalized.count <= 220 { return normalized }
+        return String(normalized.prefix(219)) + "…"
+    }
+}
+
 // MARK: - UserDefaults Extension for KVO
 
 extension UserDefaults {
@@ -2291,10 +2365,16 @@ A screenshot may be attached — use it silently only if relevant. Never mention
     ///
     /// This does not append chat UI messages and does not persist messages. The scheduler
     /// decides whether to drop HEARTBEAT_OK or surface the returned alert.
-    func runHeartbeatTurn() async throws -> String {
+    func runHeartbeatTurn() async throws -> HeartbeatTurnResult {
         guard !isSending else {
             log("ChatProvider: heartbeat skipped because a user query is in progress")
-            return "HEARTBEAT_OK"
+            return HeartbeatTurnResult(
+                text: "HEARTBEAT_OK",
+                toolActivities: [],
+                costUsd: 0,
+                inputTokens: 0,
+                outputTokens: 0
+            )
         }
 
         guard await ensureBridgeStarted() else {
@@ -2333,6 +2413,7 @@ Never perform destructive actions, sends, purchases, credential changes, or prod
 Read `\(heartbeatFilePath)` if it exists. Check only safe, useful background context. If nothing needs attention, reply HEARTBEAT_OK. Otherwise return one concise alert for Markus.
 """
 
+        let activityRecorder = HeartbeatToolActivityRecorder()
         let queryResult = try await agentBridge.query(
             prompt: prompt,
             systemPrompt: systemPrompt,
@@ -2347,7 +2428,8 @@ Read `\(heartbeatFilePath)` if it exists. Check only safe, useful background con
                 let toolCall = ToolCall(name: name, arguments: input, thoughtSignature: nil)
                 return await ChatToolExecutor.execute(toolCall)
             },
-            onToolActivity: { name, status, _, _ in
+            onToolActivity: { name, status, _, input in
+                activityRecorder.record(name: name, status: status, input: input)
                 log("ChatProvider heartbeat tool \(name) \(status)")
             },
             onThinkingDelta: { _ in },
@@ -2366,7 +2448,13 @@ Read `\(heartbeatFilePath)` if it exists. Check only safe, useful background con
         )
 
         log("ChatProvider: heartbeat response complete")
-        return queryResult.text
+        return HeartbeatTurnResult(
+            text: queryResult.text,
+            toolActivities: activityRecorder.snapshot(),
+            costUsd: queryResult.costUsd,
+            inputTokens: queryResult.inputTokens,
+            outputTokens: queryResult.outputTokens
+        )
     }
 
     private func heartbeatAttributeValue(_ value: String) -> String {

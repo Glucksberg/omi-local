@@ -120,6 +120,11 @@ final class HeartbeatScheduler: ObservableObject {
     lastRunAt = Date()
     lastStartedAt = lastRunAt
     lastCompletedAt = nil
+    let startedAt = lastRunAt ?? Date()
+    var runResult: HeartbeatTurnResult?
+    var runOutcome = "unknown"
+    var runResponseText: String?
+    var runError: Error?
     status = .running
     statusText = "Running"
     detailText = reason == "manual" ? "Manual heartbeat turn in progress" : "Scheduled heartbeat turn in progress"
@@ -127,14 +132,27 @@ final class HeartbeatScheduler: ObservableObject {
     defer {
       runningTurn = false
       isRunningTurn = false
-      lastCompletedAt = Date()
+      let completedAt = Date()
+      lastCompletedAt = completedAt
+      HeartbeatRunLogger.append(
+        startedAt: startedAt,
+        completedAt: completedAt,
+        reason: reason,
+        outcome: runOutcome,
+        result: runResult,
+        responseText: runResponseText,
+        error: runError
+      )
     }
 
     do {
-      let response = try await chatProvider.runHeartbeatTurn()
-      let trimmed = response.trimmingCharacters(in: .whitespacesAndNewlines)
+      let result = try await chatProvider.runHeartbeatTurn()
+      runResult = result
+      let trimmed = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+      runResponseText = trimmed
       guard !trimmed.isEmpty else {
         log("HeartbeatScheduler: empty heartbeat response")
+        runOutcome = "empty_response"
         status = .ok
         statusText = "Completed"
         detailText = "Heartbeat returned no alert"
@@ -143,6 +161,7 @@ final class HeartbeatScheduler: ObservableObject {
 
       if isOk(trimmed) {
         log("HeartbeatScheduler: HEARTBEAT_OK")
+        runOutcome = "ok"
         status = .ok
         statusText = "OK"
         detailText = "No alert needed"
@@ -151,6 +170,7 @@ final class HeartbeatScheduler: ObservableObject {
 
       if shouldSuppressDuplicateAlert(trimmed) {
         log("HeartbeatScheduler: duplicate alert suppressed")
+        runOutcome = "duplicate_suppressed"
         status = .skipped
         statusText = "Duplicate suppressed"
         detailText = "Same alert was already delivered recently"
@@ -160,6 +180,7 @@ final class HeartbeatScheduler: ObservableObject {
       lastAlertHash = trimmed.hashValue
       lastAlertAt = Date()
       lastAlertText = trimmed
+      runOutcome = "alert_delivered"
       NotificationService.shared.sendNotification(
         title: "Tom heartbeat",
         message: trimmed,
@@ -171,6 +192,8 @@ final class HeartbeatScheduler: ObservableObject {
       detailText = "Shown in the floating bar; macOS banner depends on notification permission"
       log("HeartbeatScheduler: delivered alert (reason=\(reason))")
     } catch {
+      runOutcome = "error"
+      runError = error
       status = .error
       statusText = "Error"
       detailText = error.localizedDescription
