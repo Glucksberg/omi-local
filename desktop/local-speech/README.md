@@ -6,7 +6,7 @@ wide network bind.
 
 - STT: `whisper.cpp` through `/v2/voice-message/transcribe`,
   `/v2/voice-message/transcribe-stream`, and `/v4/listen`.
-- TTS: macOS `say` by default, or optional Kokoro-ONNX through
+- TTS: macOS `say` by default, optional Kokoro-ONNX, or xAI TTS through
   `/v1/tts/synthesize`.
 - Observability: `/health` reports model metadata, concurrency config, request
   counts, in-flight work, last duration, and last error.
@@ -57,6 +57,30 @@ Enable local neural TTS with Kokoro-ONNX:
 ./scripts/benchmark-local-tts.sh
 ```
 
+Enable remote xAI TTS while keeping STT and LLM routing unchanged:
+
+```bash
+OMI_LOCAL_TTS_PROVIDER=xai
+OMI_LOCAL_XAI_TTS_VOICE=ara
+OMI_LOCAL_XAI_TTS_LANGUAGE=auto
+OMI_LOCAL_XAI_TTS_CODEC=mp3
+OMI_LOCAL_XAI_TTS_SAMPLE_RATE=24000
+OMI_LOCAL_XAI_TTS_BIT_RATE=128000
+```
+
+Store the real key in macOS Keychain, or export `XAI_API_KEY` in your shell for
+one-off tests:
+
+```bash
+security add-generic-password -a "$USER" -s omi-local-xai-tts-api-key -w "$XAI_API_KEY" -U
+```
+
+The xAI provider uses `POST https://api.x.ai/v1/tts` from the local loopback
+speech service. The desktop app still calls only `/v1/tts/synthesize`, so the
+API key is not passed to Swift UI code. Supported voice defaults are `ara`,
+`eve`, `leo`, `rex`, and `sal`; `auto` language works well when responses mix
+Portuguese and English.
+
 Useful overrides:
 
 ```bash
@@ -64,6 +88,7 @@ WHISPER_MODEL_SIZE=base ./scripts/setup-local-speech.sh
 WHISPER_MODEL_PATH=/path/to/ggml-medium.bin ./scripts/run-local-speech.sh
 OMI_LOCAL_TTS_VOICE=Samantha ./scripts/run-local-speech.sh
 OMI_LOCAL_TTS_PROVIDER=kokoro ./scripts/run-local-speech.sh
+OMI_LOCAL_TTS_PROVIDER=xai ./scripts/run-local-speech.sh
 OMI_LOCAL_SPEECH_WARMUP_ON_START=1 ./scripts/run-local-speech.sh
 ```
 
@@ -98,3 +123,7 @@ baseline. When `OMI_LOCAL_TTS_PROVIDER=kokoro` is set, the first Kokoro request
 loads the ONNX session and voices file into the service process; the model stays
 resident until the service restarts. Start with the `int8` Kokoro model for this
 MacBook, then compare `fp16` only if voice quality is the limiting factor.
+
+When `OMI_LOCAL_TTS_PROVIDER=xai` is set, no local TTS model is loaded. Each TTS
+request is proxied to xAI and returns remote audio bytes, so local memory and
+CPU usage stay low; latency depends on network and xAI response time.

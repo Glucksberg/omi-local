@@ -11,6 +11,8 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
 import wave
 from pathlib import Path
 from typing import Any
@@ -68,6 +70,25 @@ TTS_MAX_CONCURRENCY = env_int("OMI_LOCAL_TTS_MAX_CONCURRENCY", 2)
 QUEUE_TIMEOUT_SECONDS = env_float("OMI_LOCAL_SPEECH_QUEUE_TIMEOUT_SECONDS", 10.0)
 WARMUP_ON_START = env_flag("OMI_LOCAL_SPEECH_WARMUP_ON_START")
 TTS_PROVIDER = os.environ.get("OMI_LOCAL_TTS_PROVIDER", "say").strip().lower() or "say"
+XAI_TTS_VOICES = {"ara", "eve", "leo", "rex", "sal"}
+XAI_TTS_LANG_ALIASES = {
+  "pt-br": "pt-BR",
+  "pt_br": "pt-BR",
+  "pt": "pt-BR",
+  "pt-pt": "pt-PT",
+  "pt_pt": "pt-PT",
+  "en-us": "en",
+  "en_us": "en",
+  "en-gb": "en",
+  "en_gb": "en",
+  "es-mx": "es-MX",
+  "es_mx": "es-MX",
+  "es-es": "es-ES",
+  "es_es": "es-ES",
+}
+XAI_TTS_CODECS = {"mp3", "wav", "pcm", "mulaw", "ulaw", "alaw"}
+XAI_TTS_SAMPLE_RATES = {8000, 16000, 22050, 24000, 44100, 48000}
+XAI_TTS_BIT_RATES = {32000, 64000, 96000, 128000, 192000}
 
 STT_SEMAPHORE = threading.BoundedSemaphore(STT_MAX_CONCURRENCY)
 TTS_SEMAPHORE = threading.BoundedSemaphore(TTS_MAX_CONCURRENCY)
@@ -252,6 +273,18 @@ def payload_str(payload: dict[str, Any], key: str, env_name: str, default: str) 
   return text or default
 
 
+def payload_int(payload: dict[str, Any], key: str, env_name: str, default: int) -> int:
+  value = payload.get(key)
+  if value is None:
+    value = os.environ.get(env_name)
+  if value is None:
+    return default
+  try:
+    return int(value)
+  except (TypeError, ValueError):
+    return default
+
+
 def payload_float(payload: dict[str, Any], key: str, env_name: str, default: float) -> float:
   value = payload.get(key)
   if value is None:
@@ -262,6 +295,17 @@ def payload_float(payload: dict[str, Any], key: str, env_name: str, default: flo
     return float(value)
   except (TypeError, ValueError):
     return default
+
+
+def payload_bool(payload: dict[str, Any], key: str, env_name: str, default: bool) -> bool:
+  value = payload.get(key)
+  if value is None:
+    value = os.environ.get(env_name)
+  if value is None:
+    return default
+  if isinstance(value, bool):
+    return value
+  return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def mark_started(kind: str) -> None:
@@ -518,6 +562,170 @@ def run_kokoro_tts(text: str, payload: dict[str, Any]) -> bytes:
     TTS_SEMAPHORE.release()
 
 
+def xai_api_key() -> str:
+  api_key = (os.environ.get("XAI_API_KEY") or os.environ.get("OMI_XAI_API_KEY") or "").strip()
+  if not api_key:
+    raise HTTPException(status_code=503, detail="XAI_API_KEY is required for xAI TTS")
+  return api_key
+
+
+def xai_tts_url() -> str:
+  return os.environ.get("OMI_LOCAL_XAI_TTS_URL", "https://api.x.ai/v1/tts").strip() or "https://api.x.ai/v1/tts"
+
+
+def xai_voice_id(payload: dict[str, Any]) -> str:
+  voice = (
+    payload.get("xai_voice_id") or os.environ.get("OMI_LOCAL_XAI_TTS_VOICE") or ""
+  ).strip().lower()
+  if voice in XAI_TTS_VOICES:
+    return voice
+
+  generic_voice = str(payload.get("voice") or payload.get("voice_id") or "").strip().lower()
+  if generic_voice in XAI_TTS_VOICES:
+    return generic_voice
+
+  return "ara"
+
+
+def xai_language(payload: dict[str, Any]) -> str:
+  language = (
+    payload.get("xai_language")
+    or os.environ.get("OMI_LOCAL_XAI_TTS_LANGUAGE")
+    or payload.get("language")
+    or payload.get("lang")
+    or "auto"
+  )
+  normalized = str(language).strip()
+  if not normalized:
+    return "auto"
+  return XAI_TTS_LANG_ALIASES.get(normalized.lower(), normalized)
+
+
+def xai_output_format(payload: dict[str, Any]) -> dict[str, Any]:
+  raw_format = payload.get("xai_output_format") or os.environ.get("OMI_LOCAL_XAI_TTS_OUTPUT_FORMAT")
+  if raw_format is None and isinstance(payload.get("output_format"), dict):
+    raw_format = payload["output_format"]
+  if isinstance(raw_format, dict):
+    source = raw_format
+  elif isinstance(raw_format, str) and raw_format.strip().startswith("{"):
+    try:
+      source = json.loads(raw_format)
+    except json.JSONDecodeError:
+      source = {}
+  else:
+    source = {}
+
+  codec = (
+    str(source.get("codec") or os.environ.get("OMI_LOCAL_XAI_TTS_CODEC") or "mp3")
+    .strip()
+    .lower()
+  )
+  codec = "mulaw" if codec == "ulaw" else codec
+  if codec not in XAI_TTS_CODECS:
+    codec = "mp3"
+
+  sample_rate = payload_int(source, "sample_rate", "OMI_LOCAL_XAI_TTS_SAMPLE_RATE", 24000)
+  if sample_rate not in XAI_TTS_SAMPLE_RATES:
+    sample_rate = 24000
+
+  output: dict[str, Any] = {"codec": codec, "sample_rate": sample_rate}
+  if codec == "mp3":
+    bit_rate = payload_int(source, "bit_rate", "OMI_LOCAL_XAI_TTS_BIT_RATE", 128000)
+    if bit_rate not in XAI_TTS_BIT_RATES:
+      bit_rate = 128000
+    output["bit_rate"] = bit_rate
+  return output
+
+
+def xai_media_type(output_format: dict[str, Any], content_type: str | None) -> str:
+  if content_type:
+    media_type = content_type.split(";", 1)[0].strip()
+    if media_type.startswith("audio/"):
+      return media_type
+
+  codec = str(output_format.get("codec", "mp3")).lower()
+  if codec == "mp3":
+    return "audio/mpeg"
+  if codec == "wav":
+    return "audio/wav"
+  if codec == "pcm":
+    return "audio/pcm"
+  if codec == "alaw":
+    return "audio/alaw"
+  return "audio/basic"
+
+
+def xai_tts_payload(text: str, payload: dict[str, Any]) -> dict[str, Any]:
+  request_payload: dict[str, Any] = {
+    "text": text,
+    "voice_id": xai_voice_id(payload),
+    "language": xai_language(payload),
+    "output_format": xai_output_format(payload),
+  }
+
+  if payload_bool(payload, "xai_text_normalization", "OMI_LOCAL_XAI_TTS_TEXT_NORMALIZATION", False):
+    request_payload["text_normalization"] = True
+
+  optimize_latency = payload_int(
+    payload,
+    "xai_optimize_streaming_latency",
+    "OMI_LOCAL_XAI_TTS_OPTIMIZE_STREAMING_LATENCY",
+    0,
+  )
+  if optimize_latency in {0, 1}:
+    request_payload["optimize_streaming_latency"] = optimize_latency
+  return request_payload
+
+
+def run_xai_tts(text: str, payload: dict[str, Any]) -> tuple[bytes, str]:
+  acquire_slot("tts", TTS_SEMAPHORE)
+  started_at = time.perf_counter()
+  mark_started("tts")
+  try:
+    request_payload = xai_tts_payload(text, payload)
+    body = json.dumps(request_payload).encode("utf-8")
+    request = urllib.request.Request(
+      xai_tts_url(),
+      data=body,
+      headers={
+        "Authorization": f"Bearer {xai_api_key()}",
+        "Content-Type": "application/json",
+        "Accept": "audio/*",
+        "User-Agent": "omi-local-speech/1.0",
+      },
+      method="POST",
+    )
+    timeout = env_float("OMI_LOCAL_XAI_TTS_TIMEOUT_SECONDS", 60.0, 1.0)
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+      audio = response.read()
+      if not audio:
+        raise HTTPException(status_code=502, detail="xAI TTS returned an empty audio response")
+      media_type = xai_media_type(
+        request_payload["output_format"],
+        response.headers.get("Content-Type"),
+      )
+      mark_finished("tts", started_at)
+      return audio, media_type
+  except urllib.error.HTTPError as exc:
+    detail = exc.read().decode("utf-8", errors="replace").strip()[-1200:]
+    error = HTTPException(status_code=502, detail=f"xAI TTS failed with HTTP {exc.code}: {detail}")
+    mark_finished("tts", started_at, error)
+    raise error
+  except urllib.error.URLError as exc:
+    error = HTTPException(status_code=502, detail=f"xAI TTS request failed: {exc.reason}")
+    mark_finished("tts", started_at, error)
+    raise error
+  except TimeoutError as exc:
+    error = HTTPException(status_code=504, detail="xAI TTS request timed out")
+    mark_finished("tts", started_at, error)
+    raise error
+  except Exception as exc:
+    mark_finished("tts", started_at, exc)
+    raise
+  finally:
+    TTS_SEMAPHORE.release()
+
+
 def silent_audio(seconds: float = 0.25) -> bytes:
   frame_count = int(DEFAULT_SAMPLE_RATE * DEFAULT_CHANNELS * seconds)
   return b"\0\0" * frame_count
@@ -605,6 +813,13 @@ def health() -> dict[str, Any]:
       "kokoro_loaded": KOKORO_ENGINE is not None,
       "kokoro_default_voice": os.environ.get("OMI_LOCAL_KOKORO_VOICE", "af_heart"),
       "kokoro_default_lang": os.environ.get("OMI_LOCAL_KOKORO_LANG", "en-us"),
+      "xai_configured": bool(
+        (os.environ.get("XAI_API_KEY") or os.environ.get("OMI_XAI_API_KEY") or "").strip()
+      ),
+      "xai_url": xai_tts_url(),
+      "xai_default_voice": os.environ.get("OMI_LOCAL_XAI_TTS_VOICE", "ara"),
+      "xai_default_language": os.environ.get("OMI_LOCAL_XAI_TTS_LANGUAGE", "auto"),
+      "xai_default_codec": os.environ.get("OMI_LOCAL_XAI_TTS_CODEC", "mp3"),
       "metrics": metrics_snapshot("tts"),
     },
     "warmup": metrics_snapshot("warmup"),
@@ -713,6 +928,9 @@ async def synthesize_tts(request: Request) -> Response:
     raise HTTPException(status_code=400, detail="text is required")
   if len(text) > MAX_TTS_CHARS:
     raise HTTPException(status_code=413, detail="text is too long")
+  if TTS_PROVIDER == "xai":
+    audio, media_type = await asyncio.to_thread(run_xai_tts, text, payload)
+    return Response(content=audio, media_type=media_type)
   if TTS_PROVIDER == "kokoro":
     audio = await asyncio.to_thread(run_kokoro_tts, text, payload)
     return Response(content=audio, media_type="audio/wav")
