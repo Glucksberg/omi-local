@@ -52,8 +52,10 @@ struct AIResponseView: View {
                     }
                     .background(
                         GeometryReader { geo -> Color in
-                            let h = geo.size.height
+                            let h = geo.size.height.rounded()
                             DispatchQueue.main.async {
+                                guard h.isFinite,
+                                      abs(state.responseContentHeight - h) > 1 else { return }
                                 state.responseContentHeight = h
                             }
                             return Color.clear
@@ -159,22 +161,36 @@ struct AIResponseView: View {
     private func contentBlocksView(for message: ChatMessage) -> some View {
         if !message.contentBlocks.isEmpty {
             let grouped = groupedContentBlocks(for: message)
-            ForEach(grouped) { group in
-                switch group {
-                case .text(_, let text):
-                    SelectableMarkdown(text: text, sender: .ai)
+            if grouped.isEmpty {
+                if !message.text.isEmpty {
+                    SelectableMarkdown(text: message.text, sender: .ai)
                         .textSelection(.enabled)
                         .environment(\.colorScheme, .dark)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                case .toolCalls(_, let calls):
-                    ToolCallsGroup(calls: calls)
+                } else if message.isStreaming {
+                    Text("working...")
+                        .scaledFont(size: 13)
+                        .foregroundColor(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                case .thinking(_, let text):
-                    ThinkingBlock(text: text)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                case .discoveryCard(_, let title, let summary, let fullText):
-                    DiscoveryCard(title: title, summary: summary, fullText: fullText)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } else {
+                ForEach(grouped) { group in
+                    switch group {
+                    case .text(_, let text):
+                        SelectableMarkdown(text: text, sender: .ai)
+                            .textSelection(.enabled)
+                            .environment(\.colorScheme, .dark)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    case .toolCalls(_, let calls):
+                        ToolCallsGroup(calls: calls)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    case .thinking(_, let text):
+                        ThinkingBlock(text: text)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    case .discoveryCard(_, let title, let summary, let fullText):
+                        DiscoveryCard(title: title, summary: summary, fullText: fullText)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
             }
         } else if !message.text.isEmpty {
@@ -187,8 +203,6 @@ struct AIResponseView: View {
 
     private func groupedContentBlocks(for message: ChatMessage) -> [ContentBlockGroup] {
         let grouped = ContentBlockGroup.group(message.contentBlocks)
-        guard !message.isStreaming else { return grouped }
-
         return grouped.filter { group in
             switch group {
             case .text, .discoveryCard:
