@@ -182,6 +182,7 @@ struct SettingsContentView: View {
 
   // Heartbeat settings
   @ObservedObject private var heartbeatSettings = HeartbeatSettings.shared
+  @ObservedObject private var heartbeatScheduler = HeartbeatScheduler.shared
 
   // Tier gating (0 = show all, 1-6 = sequential tiers)
   @AppStorage("currentTierLevel") private var currentTierLevel = 0
@@ -2461,6 +2462,47 @@ struct SettingsContentView: View {
           if heartbeatSettings.isEnabled {
             Divider()
 
+            HStack(alignment: .top, spacing: 10) {
+              Circle()
+                .fill(heartbeatStatusColor)
+                .frame(width: 8, height: 8)
+                .padding(.top, 5)
+
+              VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                  Text(heartbeatScheduler.statusText)
+                    .scaledFont(size: 13, weight: .semibold)
+                    .foregroundColor(OmiColors.textSecondary)
+
+                  if heartbeatScheduler.isRunningTurn {
+                    ProgressView()
+                      .controlSize(.mini)
+                  }
+                }
+
+                Text(heartbeatScheduler.detailText)
+                  .scaledFont(size: 12)
+                  .foregroundColor(OmiColors.textTertiary)
+
+                HStack(spacing: 10) {
+                  Text("Last: \(heartbeatDateText(heartbeatScheduler.lastCompletedAt ?? heartbeatScheduler.lastStartedAt))")
+                  Text("Next: \(heartbeatNextRunText)")
+                }
+                .scaledFont(size: 11)
+                .foregroundColor(OmiColors.textTertiary.opacity(0.85))
+
+                if let alert = heartbeatScheduler.lastAlertText, !alert.isEmpty {
+                  Text(alert)
+                    .scaledFont(size: 12)
+                    .foregroundColor(OmiColors.textSecondary)
+                    .lineLimit(2)
+                    .padding(.top, 2)
+                }
+              }
+            }
+
+            Divider()
+
             HStack {
               VStack(alignment: .leading, spacing: 2) {
                 Text("Interval")
@@ -2487,8 +2529,40 @@ struct SettingsContentView: View {
               Button("Run Now") {
                 HeartbeatScheduler.shared.runNow()
               }
+              .disabled(heartbeatScheduler.isRunningTurn)
               .buttonStyle(.bordered)
               .controlSize(.small)
+            }
+
+            Divider()
+
+            HStack {
+              VStack(alignment: .leading, spacing: 2) {
+                Text("Memory writes")
+                  .scaledFont(size: 14)
+                  .foregroundColor(OmiColors.textSecondary)
+                Text("Allows consolidation files only inside TomMemory")
+                  .scaledFont(size: 12)
+                  .foregroundColor(OmiColors.textTertiary)
+              }
+
+              Spacer()
+
+              Toggle("", isOn: $heartbeatSettings.allowMemoryWrites)
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .labelsHidden()
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+              Text("Write scope")
+                .scaledFont(size: 11, weight: .medium)
+                .foregroundColor(OmiColors.textTertiary)
+              Text(heartbeatSettings.memoryDirectory)
+                .scaledFont(size: 11, design: .monospaced)
+                .foregroundColor(OmiColors.textTertiary)
+                .lineLimit(1)
+                .truncationMode(.middle)
             }
           }
         }
@@ -5258,6 +5332,38 @@ struct SettingsContentView: View {
     formatter.dateStyle = .short
     formatter.timeStyle = .short
     return formatter
+  }
+
+  private var heartbeatStatusColor: Color {
+    switch heartbeatScheduler.status {
+    case .disabled:
+      return OmiColors.textTertiary
+    case .idle:
+      return .blue
+    case .running:
+      return .orange
+    case .ok:
+      return .green
+    case .alert:
+      return .purple
+    case .skipped:
+      return .yellow
+    case .error:
+      return .red
+    }
+  }
+
+  private var heartbeatNextRunText: String {
+    guard heartbeatSettings.isEnabled else { return "disabled" }
+    guard let next = heartbeatScheduler.nextRunAt else {
+      return heartbeatScheduler.isRunningTurn ? "running now" : "soon"
+    }
+    return relativeDateFormatter.string(from: next)
+  }
+
+  private func heartbeatDateText(_ date: Date?) -> String {
+    guard let date else { return "never" }
+    return relativeDateFormatter.string(from: date)
   }
 
   // MARK: - Developer API Keys Subsection

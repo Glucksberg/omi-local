@@ -983,6 +983,15 @@ function readEvent(path: string): ToolCallEvent {
   };
 }
 
+function customEvent(toolName: string, input: Record<string, unknown> = {}): ToolCallEvent {
+  return {
+    type: "tool_call",
+    toolCallId: "t5",
+    toolName,
+    input,
+  };
+}
+
 test("inspectToolCall: denies dangerous bash", () => {
   const d = inspectToolCall(bashEvent("sudo rm -rf /"));
   assert.ok(d);
@@ -1013,6 +1022,112 @@ test("inspectToolCall: passthrough for unknown custom tools", () => {
     input: { arbitrary: "data" } as unknown as { command: string },
   };
   assert.equal(inspectToolCall(evt), null);
+});
+
+test("inspectToolCall: heartbeat allows memory writes inside TomMemory", () => {
+  const memoryDir = pathJoin(tmpdir(), "omi-tom-memory-test");
+  withPatchedEnv(
+    {
+      OMI_HEARTBEAT_MODE: "1",
+      OMI_HEARTBEAT_MEMORY_WRITES: "1",
+      OMI_HEARTBEAT_MEMORY_DIR: memoryDir,
+    },
+    () => {
+      assert.equal(inspectToolCall(writeEvent(pathJoin(memoryDir, "MEMORY.md"))), null);
+      assert.equal(inspectToolCall(editEvent(pathJoin(memoryDir, "daily", "2026-04-26.md"))), null);
+    },
+  );
+});
+
+test("inspectToolCall: heartbeat blocks memory writes outside TomMemory", () => {
+  const memoryDir = pathJoin(tmpdir(), "omi-tom-memory-test");
+  withPatchedEnv(
+    {
+      OMI_HEARTBEAT_MODE: "1",
+      OMI_HEARTBEAT_MEMORY_WRITES: "1",
+      OMI_HEARTBEAT_MEMORY_DIR: memoryDir,
+    },
+    () => {
+      const outside = inspectToolCall(writeEvent(pathJoin(tmpdir(), "outside-memory.md")));
+      assert.ok(outside);
+      assert.match(outside!.reason, /TomMemory/);
+
+      const traversal = inspectToolCall(writeEvent(pathJoin(memoryDir, "..", "outside-memory.md")));
+      assert.ok(traversal);
+      assert.match(traversal!.reason, /TomMemory/);
+    },
+  );
+});
+
+test("inspectToolCall: heartbeat blocks memory writes when disabled", () => {
+  const memoryDir = pathJoin(tmpdir(), "omi-tom-memory-test");
+  withPatchedEnv(
+    {
+      OMI_HEARTBEAT_MODE: "1",
+      OMI_HEARTBEAT_MEMORY_WRITES: "0",
+      OMI_HEARTBEAT_MEMORY_DIR: memoryDir,
+    },
+    () => {
+      const d = inspectToolCall(writeEvent(pathJoin(memoryDir, "MEMORY.md")));
+      assert.ok(d);
+      assert.match(d!.reason, /disabled/);
+    },
+  );
+});
+
+test("inspectToolCall: heartbeat allows read-only bash", () => {
+  withPatchedEnv(
+    {
+      OMI_HEARTBEAT_MODE: "1",
+      OMI_HEARTBEAT_MEMORY_WRITES: "1",
+      OMI_HEARTBEAT_MEMORY_DIR: pathJoin(tmpdir(), "omi-tom-memory-test"),
+    },
+    () => {
+      assert.equal(inspectToolCall(bashEvent("ls -la")), null);
+      assert.equal(inspectToolCall(bashEvent("cat ~/Documents/Omi/TomMemory/HEARTBEAT.md")), null);
+      assert.equal(inspectToolCall(bashEvent("git status --short")), null);
+    },
+  );
+});
+
+test("inspectToolCall: heartbeat blocks mutating bash", () => {
+  const memoryFile = pathJoin(tmpdir(), "omi-tom-memory-test", "MEMORY.md");
+  withPatchedEnv(
+    {
+      OMI_HEARTBEAT_MODE: "1",
+      OMI_HEARTBEAT_MEMORY_WRITES: "1",
+      OMI_HEARTBEAT_MEMORY_DIR: pathJoin(tmpdir(), "omi-tom-memory-test"),
+    },
+    () => {
+      const redirect = inspectToolCall(bashEvent(`echo hi > "${memoryFile}"`));
+      assert.ok(redirect);
+      assert.match(redirect!.reason, /read-only/);
+
+      const mkdir = inspectToolCall(bashEvent("mkdir -p ~/Documents/Omi/TomMemory/daily"));
+      assert.ok(mkdir);
+      assert.match(mkdir!.reason, /read-only/);
+
+      const inline = inspectToolCall(bashEvent("python3 -c 'open(\"x\", \"w\").write(\"x\")'"));
+      assert.ok(inline);
+      assert.match(inline!.reason, /Inline script/);
+    },
+  );
+});
+
+test("inspectToolCall: heartbeat blocks mutating Omi tools", () => {
+  withPatchedEnv(
+    {
+      OMI_HEARTBEAT_MODE: "1",
+      OMI_HEARTBEAT_MEMORY_WRITES: "1",
+      OMI_HEARTBEAT_MEMORY_DIR: pathJoin(tmpdir(), "omi-tom-memory-test"),
+    },
+    () => {
+      assert.ok(inspectToolCall(customEvent("create_action_item", { description: "x" })));
+      assert.ok(inspectToolCall(customEvent("delete_task", { task_id: "1" })));
+      assert.ok(inspectToolCall(customEvent("capture_screen")));
+      assert.equal(inspectToolCall(customEvent("execute_sql", { query: "select 1" })), null);
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------

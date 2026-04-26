@@ -31,7 +31,7 @@ import { Type } from "@mariozechner/pi-ai";
 import { appendFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { createConnection, type Socket } from "node:net";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 // ---------------------------------------------------------------------------
 // Denylist patterns
@@ -295,6 +295,134 @@ export function classifyFileWrite(filePath: string): DenyDecision | null {
   return null;
 }
 
+const HEARTBEAT_MUTATING_TOOL_NAMES = new Set([
+  "capture_screen",
+  "complete_task",
+  "create_action_item",
+  "delete_task",
+  "update_action_item",
+]);
+
+const HEARTBEAT_BASH_MUTATION_RULES: DenyRule[] = [
+  {
+    pattern: />>?/,
+    reason:
+      "Heartbeat shell commands are read-only. Use write/edit under TomMemory for memory updates.",
+  },
+  {
+    pattern:
+      /(?:^|[\n;&|`(]|\$\()\s*(?:rm|mv|cp|mkdir|rmdir|touch|chmod|chown|chgrp|ln|install|truncate|tee)\b/,
+    reason:
+      "Heartbeat shell commands are read-only. Use write/edit under TomMemory for memory updates.",
+  },
+  {
+    pattern: /\b(?:sed\s+-i|perl\s+-pi)\b/,
+    reason:
+      "In-place shell edits are blocked during heartbeat. Use edit under TomMemory for memory updates.",
+  },
+  {
+    pattern:
+      /(?:^|[\n;&|`(]|\$\()\s*(?:python3?|node|ruby|perl|osascript)\s+(?:-c|-e|-pi)\b/,
+    reason:
+      "Inline script execution is blocked during heartbeat because it can mutate arbitrary files.",
+  },
+  {
+    pattern:
+      /\b(?:brew|npm|pnpm|yarn|pipx?|uv|cargo|go)\s+(?:add|i|install|remove|uninstall|update|upgrade)\b/,
+    reason:
+      "Package installation or updates are blocked during heartbeat.",
+  },
+  {
+    pattern:
+      /\bgit\s+(?:add|branch|checkout|clean|commit|merge|pull|push|rebase|reset|restore|stash|switch|tag)\b/,
+    reason:
+      "Git mutations are blocked during heartbeat. Use read-only git commands such as status, diff, log, or show.",
+  },
+  {
+    pattern: /\b(?:defaults\s+write|launchctl)\b/,
+    reason:
+      "System or app setting changes are blocked during heartbeat.",
+  },
+];
+
+function expandHome(filePath: string): string {
+  if (filePath === "~") return homedir();
+  if (filePath.startsWith("~/")) return join(homedir(), filePath.slice(2));
+  return filePath;
+}
+
+function heartbeatMemoryDir(): string {
+  const configured = process.env.OMI_HEARTBEAT_MEMORY_DIR?.trim();
+  return resolve(expandHome(configured || join(homedir(), "Documents", "Omi", "TomMemory")));
+}
+
+function isPathInsideDirectory(filePath: string, directory: string): boolean {
+  const resolvedFile = resolve(expandHome(filePath));
+  const resolvedDirectory = resolve(expandHome(directory));
+  const rel = relative(resolvedDirectory, resolvedFile);
+  return rel === "" || (rel !== "" && !rel.startsWith("..") && !isAbsolute(rel));
+}
+
+function isHeartbeatMode(): boolean {
+  return process.env.OMI_HEARTBEAT_MODE === "1";
+}
+
+export function heartbeatMutatingBashDecision(command: string): DenyDecision | null {
+  if (typeof command !== "string" || command.length === 0) return null;
+  const normalized = normalizeBashCommand(command);
+  for (const rule of HEARTBEAT_BASH_MUTATION_RULES) {
+    if (rule.pattern.test(normalized)) {
+      return { blocked: true, reason: rule.reason };
+    }
+  }
+  return null;
+}
+
+function inspectHeartbeatToolCall(event: ToolCallEvent): DenyDecision | null {
+  if (!isHeartbeatMode()) return null;
+
+  switch (event.toolName) {
+    case "bash": {
+      const command = (event.input as { command?: unknown })?.command;
+      return typeof command === "string" ? heartbeatMutatingBashDecision(command) : null;
+    }
+    case "write":
+    case "edit":
+    case "edit-diff": {
+      const path = (event.input as { path?: unknown })?.path;
+      if (process.env.OMI_HEARTBEAT_MEMORY_WRITES !== "1") {
+        return {
+          blocked: true,
+          reason: "Heartbeat memory writes are disabled in Omi Local settings.",
+        };
+      }
+      if (typeof path !== "string" || path.length === 0) {
+        return {
+          blocked: true,
+          reason: "Heartbeat memory writes require an explicit file path under TomMemory.",
+        };
+      }
+      const memoryDir = heartbeatMemoryDir();
+      if (!isPathInsideDirectory(path, memoryDir)) {
+        return {
+          blocked: true,
+          reason: `Heartbeat may write only under TomMemory (${memoryDir}).`,
+        };
+      }
+      return null;
+    }
+    default:
+      if (HEARTBEAT_MUTATING_TOOL_NAMES.has(event.toolName)) {
+        return {
+          blocked: true,
+          reason:
+            "Heartbeat may only read context and write consolidated memory files under TomMemory.",
+        };
+      }
+      return null;
+  }
+}
+
 /** Classify a whole tool_call event by dispatching on toolName.
  *  When OMI_YOLO_MODE=1, all tool calls are allowed (no denylist).
  *  Yolo mode is gated by the adapter — only forwarded from dev builds. */
@@ -303,6 +431,9 @@ export function inspectToolCall(event: ToolCallEvent): DenyDecision | null {
     process.stderr.write(`[omi-provider] YOLO bypass: ${event.toolName}\n`);
     return null;
   }
+  const heartbeatDecision = inspectHeartbeatToolCall(event);
+  if (heartbeatDecision) return heartbeatDecision;
+
   switch (event.toolName) {
     case "bash": {
       const command = (event.input as { command?: unknown })?.command;
@@ -831,8 +962,12 @@ export const __omiPendingCallsForTest = omiPendingCalls;
 /** Test-only: reset pipe state between tests. */
 export function __resetOmiPipeForTest(): void {
   if (omiPipeConnection) {
-    omiPipeConnection.destroy();
+    const connection = omiPipeConnection;
     omiPipeConnection = null;
+    connection.removeAllListeners("data");
+    connection.removeAllListeners("error");
+    connection.removeAllListeners("close");
+    connection.destroy();
   }
   omiPipeBuffer = "";
   omiCallIdCounter = 0;

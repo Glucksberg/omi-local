@@ -1291,7 +1291,12 @@ async function runPiMonoMode(): Promise<void> {
             // setSystemPrompt is a no-op when the value hasn't changed; it
             // triggers a subprocess restart only when the baked --system-prompt
             // flag differs from what pi was spawned with.
-            if (entry?.systemPrompt) {
+            const prompt = qm.systemPrompt || entry?.systemPrompt;
+            if (prompt && prompt !== entry?.systemPrompt) {
+              await adapter.setSystemPrompt(prompt);
+              entry = { ...entry!, sessionId, systemPrompt: prompt };
+              piSessions.set(sessionKey, entry);
+            } else if (entry?.systemPrompt) {
               await adapter.setSystemPrompt(entry.systemPrompt);
             }
             if (model && entry?.model !== model) {

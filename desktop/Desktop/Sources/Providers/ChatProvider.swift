@@ -2301,13 +2301,28 @@ A screenshot may be attached — use it silently only if relevant. Never mention
             throw BridgeError.notRunning
         }
 
+        let heartbeatSettings = HeartbeatSettings.shared
+        let memoryDirectory = heartbeatSettings.memoryDirectory
+        let heartbeatFilePath = heartbeatSettings.heartbeatFilePath
+        let memoryWrites = heartbeatSettings.allowMemoryWrites ? "allowed" : "disabled"
+        let memoryWriteInstructions = heartbeatSettings.allowMemoryWrites
+            ? """
+You may consolidate durable memories by creating or updating Markdown files under `\(memoryDirectory)` only.
+Prefer the write/edit tools for memory files. Do not use shell redirection for memory writes.
+Never write outside `\(memoryDirectory)`.
+"""
+            : """
+Memory file writes are disabled for this heartbeat. Read context only and return an alert or HEARTBEAT_OK.
+"""
+
         var systemPrompt = cachedMainSystemPrompt
         systemPrompt += """
 
-<heartbeat_run>
+<heartbeat_run memory_writes="\(memoryWrites)" memory_dir="\(heartbeatAttributeValue(memoryDirectory))">
 You are running a scheduled heartbeat for Markus.
-Read `/Users/markus/Documents/Omi/TomMemory/HEARTBEAT.md` if needed and follow it strictly.
+Read `\(heartbeatFilePath)` if it exists and follow it strictly.
 Use lightweight context. Do not repeat old alerts. Do not invent tasks.
+\(memoryWriteInstructions)
 If nothing needs Markus's attention, reply exactly `HEARTBEAT_OK`.
 If something matters, reply with one concise alert in Brazilian Portuguese, max 500 chars.
 Never perform destructive actions, sends, purchases, credential changes, or production restarts during heartbeat.
@@ -2315,7 +2330,7 @@ Never perform destructive actions, sends, purchases, credential changes, or prod
 """
 
         let prompt = """
-Read HEARTBEAT.md if it exists. Check only safe, useful background context. If nothing needs attention, reply HEARTBEAT_OK. Otherwise return one concise alert for Markus.
+Read `\(heartbeatFilePath)` if it exists. Check only safe, useful background context. If nothing needs attention, reply HEARTBEAT_OK. Otherwise return one concise alert for Markus.
 """
 
         let queryResult = try await agentBridge.query(
@@ -2352,6 +2367,14 @@ Read HEARTBEAT.md if it exists. Check only safe, useful background context. If n
 
         log("ChatProvider: heartbeat response complete")
         return queryResult.text
+    }
+
+    private func heartbeatAttributeValue(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
     }
 
     /// Send a message and get AI response via Claude Agent SDK bridge

@@ -151,6 +151,38 @@ function resolveBundledExtension(): string {
   ).pathname);
 }
 
+interface HeartbeatPromptConfig {
+  enabled: boolean;
+  memoryWritesAllowed: boolean;
+  memoryDir?: string;
+}
+
+function decodePromptAttribute(value: string): string {
+  return value
+    .replace(/&quot;/g, "\"")
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+function heartbeatConfigFromSystemPrompt(systemPrompt?: string): HeartbeatPromptConfig {
+  const match = systemPrompt?.match(/<heartbeat_run\b([^>]*)>/);
+  if (!match) {
+    return { enabled: false, memoryWritesAllowed: false };
+  }
+
+  const attrs = match[1] ?? "";
+  const memoryWritesAllowed = /\bmemory_writes=(["'])allowed\1/.test(attrs);
+  const memoryDirMatch = attrs.match(/\bmemory_dir="([^"]*)"/)
+    ?? attrs.match(/\bmemory_dir='([^']*)'/);
+  const memoryDir = memoryDirMatch?.[1]
+    ? decodePromptAttribute(memoryDirMatch[1])
+    : undefined;
+
+  return { enabled: true, memoryWritesAllowed, memoryDir };
+}
+
 export class PiMonoAdapter implements HarnessAdapter {
   readonly name = "pi-mono";
 
@@ -253,6 +285,18 @@ export class PiMonoAdapter implements HarnessAdapter {
       ...process.env as Record<string, string>,
     };
     delete env.ANTHROPIC_API_KEY;
+    delete env.OMI_HEARTBEAT_MODE;
+    delete env.OMI_HEARTBEAT_MEMORY_WRITES;
+    delete env.OMI_HEARTBEAT_MEMORY_DIR;
+
+    const heartbeatConfig = heartbeatConfigFromSystemPrompt(this.currentSystemPrompt);
+    if (heartbeatConfig.enabled) {
+      env.OMI_HEARTBEAT_MODE = "1";
+      env.OMI_HEARTBEAT_MEMORY_WRITES = heartbeatConfig.memoryWritesAllowed ? "1" : "0";
+      if (heartbeatConfig.memoryDir) {
+        env.OMI_HEARTBEAT_MEMORY_DIR = heartbeatConfig.memoryDir;
+      }
+    }
 
     // SECURITY: OMI_YOLO_MODE bypasses the extension's entire tool denylist.
     // Scrub it from the subprocess env, then only re-inject when explicitly
