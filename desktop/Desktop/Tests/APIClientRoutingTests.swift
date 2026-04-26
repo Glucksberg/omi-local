@@ -35,6 +35,27 @@ private final class URLCapture: URLProtocol, @unchecked Sendable {
         lock.unlock()
     }
 
+    private static func bodyData(for request: URLRequest) -> Data? {
+        if let httpBody = request.httpBody {
+            return httpBody
+        }
+        guard let stream = request.httpBodyStream else { return nil }
+        stream.open()
+        defer { stream.close() }
+
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            if count > 0 {
+                data.append(buffer, count: count)
+            } else {
+                break
+            }
+        }
+        return data.isEmpty ? nil : data
+    }
+
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
@@ -44,7 +65,7 @@ private final class URLCapture: URLProtocol, @unchecked Sendable {
                 url: url,
                 method: request.httpMethod ?? "GET",
                 headers: request.allHTTPHeaderFields ?? [:],
-                body: request.httpBody
+                body: Self.bodyData(for: request)
             ))
         }
         let response = HTTPURLResponse(url: request.url!, statusCode: 403, httpVersion: nil, headerFields: nil)!
@@ -318,6 +339,7 @@ final class APIClientRoutingTests: XCTestCase {
         XCTAssertEqual(json["voice_id"] as? String, "BAMYoBHLZM7lJgJAmFz0")
         XCTAssertEqual(json["model_id"] as? String, "eleven_turbo_v2_5")
         XCTAssertEqual(json["output_format"] as? String, "mp3_44100_128")
+        XCTAssertNil(json["xai_voice_id"])
         XCTAssertNil(json["voiceId"])
         XCTAssertNil(json["modelId"])
         XCTAssertNil(json["outputFormat"])
@@ -329,6 +351,33 @@ final class APIClientRoutingTests: XCTestCase {
         XCTAssertEqual(voiceSettings["use_speaker_boost"] as? Bool, true)
         XCTAssertNil(voiceSettings["similarityBoost"])
         XCTAssertNil(voiceSettings["useSpeakerBoost"])
+    }
+
+    func testSynthesizeSpeechCanSendLocalXaiVoice() async throws {
+        let client = await makeTestClient()
+        let request = APIClient.TtsSynthesizeRequest(
+            text: "hello from xai",
+            voiceId: "sal",
+            modelId: "eleven_turbo_v2_5",
+            outputFormat: "mp3_44100_128",
+            voiceSettings: .init(
+                stability: 0.34,
+                similarityBoost: 0.88,
+                style: 0.12,
+                useSpeakerBoost: true
+            ),
+            xaiVoiceId: "sal"
+        )
+
+        _ = try? await client.synthesizeSpeech(request: request)
+
+        let captured = try XCTUnwrap(URLCapture.capturedRequests.first)
+        let body = try XCTUnwrap(captured.body)
+        let json = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: body) as? [String: Any]
+        )
+        XCTAssertEqual(json["voice_id"] as? String, "sal")
+        XCTAssertEqual(json["xai_voice_id"] as? String, "sal")
     }
 
     // -- Assistant settings (GET → Python, migrated from Rust) --

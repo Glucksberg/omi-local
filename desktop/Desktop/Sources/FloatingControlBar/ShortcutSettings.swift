@@ -396,6 +396,7 @@ class ShortcutSettings: ObservableObject {
         enum Gender: String {
             case female
             case male
+            case neutral
         }
 
         let id: String
@@ -418,16 +419,43 @@ class ShortcutSettings: ObservableObject {
         VoiceOption(id: "onwK4e9ZLuTAKqWW03F9", name: "Daniel", gender: .male, description: "Authoritative British"),
     ]
 
-    static let defaultVoiceID = "BAMYoBHLZM7lJgJAmFz0"
+    /// xAI voices available through the omi-local TTS proxy.
+    static let availableLocalVoices: [VoiceOption] = [
+        VoiceOption(id: "ara", name: "Ara", gender: .female, description: "Warm, friendly"),
+        VoiceOption(id: "eve", name: "Eve", gender: .female, description: "Energetic, upbeat"),
+        VoiceOption(id: "rex", name: "Rex", gender: .male, description: "Confident, clear"),
+        VoiceOption(id: "leo", name: "Leo", gender: .male, description: "Authoritative, strong"),
+        VoiceOption(id: "sal", name: "Sal", gender: .neutral, description: "Smooth, balanced"),
+    ]
 
-    static func voiceOption(for id: String) -> VoiceOption {
-        availableVoices.first(where: { $0.id == id }) ?? availableVoices[0]
+    static let defaultVoiceID = "BAMYoBHLZM7lJgJAmFz0"
+    static let defaultLocalVoiceID = "ara"
+
+    static var activeVoiceOptions: [VoiceOption] {
+        LocalMode.isEnabled ? availableLocalVoices : availableVoices
     }
 
-    /// Selected ElevenLabs voice ID for floating-bar TTS replies.
+    static var activeDefaultVoiceID: String {
+        LocalMode.isEnabled ? defaultLocalVoiceID : defaultVoiceID
+    }
+
+    static func voiceOption(for id: String) -> VoiceOption {
+        activeVoiceOptions.first(where: { $0.id == id }) ?? activeVoiceOptions[0]
+    }
+
+    static func validVoiceID(_ id: String) -> String {
+        activeVoiceOptions.contains(where: { $0.id == id }) ? id : activeDefaultVoiceID
+    }
+
+    /// Selected voice ID for floating-bar TTS replies.
     @Published var selectedVoiceID: String {
         didSet {
             guard selectedVoiceID != oldValue else { return }
+            let sanitizedVoiceID = Self.validVoiceID(selectedVoiceID)
+            if selectedVoiceID != sanitizedVoiceID {
+                selectedVoiceID = sanitizedVoiceID
+                return
+            }
             UserDefaults.standard.set(selectedVoiceID, forKey: "shortcut_selectedVoiceID")
             FloatingBarVoicePlaybackService.shared.playVoiceSample(voiceID: selectedVoiceID)
         }
@@ -482,10 +510,11 @@ class ShortcutSettings: ObservableObject {
         self.floatingBarTypedQuestionVoiceAnswersEnabled =
             UserDefaults.standard.object(forKey: "shortcut_floatingBarTypedQuestionVoiceAnswersEnabled") as? Bool ?? false
         self.voicePlaybackSpeed = UserDefaults.standard.object(forKey: "shortcut_voicePlaybackSpeed") as? Float ?? 1.4
-        let storedVoiceID = UserDefaults.standard.string(forKey: "shortcut_selectedVoiceID") ?? Self.defaultVoiceID
-        let validVoiceID = Self.availableVoices.contains(where: { $0.id == storedVoiceID })
-            ? storedVoiceID
-            : Self.defaultVoiceID
+        let storedVoiceID = UserDefaults.standard.string(forKey: "shortcut_selectedVoiceID") ?? Self.activeDefaultVoiceID
+        let validVoiceID = Self.validVoiceID(storedVoiceID)
+        if validVoiceID != storedVoiceID {
+            UserDefaults.standard.set(validVoiceID, forKey: "shortcut_selectedVoiceID")
+        }
         self.selectedVoiceID = validVoiceID
 
         NotificationCenter.default.addObserver(forName: .modelTierDidChange, object: nil, queue: .main) { [weak self] _ in

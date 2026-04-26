@@ -369,7 +369,8 @@ final class FloatingBarVoicePlaybackService: NSObject, AVAudioPlayerDelegate {
         similarityBoost: 0.88,
         style: 0.12,
         useSpeakerBoost: true
-      )
+      ),
+      xaiVoiceId: LocalMode.isEnabled ? voiceID : nil
     )
     return try await APIClient.shared.synthesizeSpeech(request: request)
   }

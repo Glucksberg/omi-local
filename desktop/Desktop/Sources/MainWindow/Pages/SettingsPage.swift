@@ -2289,7 +2289,7 @@ struct SettingsContentView: View {
     settingsCard(settingId: settingId) {
       HStack(spacing: 16) {
         VStack(alignment: .leading, spacing: 4) {
-          Text("Voice")
+          Text(LocalMode.isEnabled ? "xAI Voice" : "Voice")
             .scaledFont(size: 16, weight: .semibold)
             .foregroundColor(OmiColors.textPrimary)
           Text(
@@ -2300,14 +2300,22 @@ struct SettingsContentView: View {
         }
         Spacer()
         Picker("", selection: $shortcutSettings.selectedVoiceID) {
-          Section("Female") {
-            ForEach(ShortcutSettings.availableVoices.filter { $0.gender == .female }) { voice in
-              Text(voice.name).tag(voice.id)
+          if LocalMode.isEnabled {
+            Section("xAI") {
+              ForEach(ShortcutSettings.availableLocalVoices) { voice in
+                Text(voice.name).tag(voice.id)
+              }
             }
-          }
-          Section("Male") {
-            ForEach(ShortcutSettings.availableVoices.filter { $0.gender == .male }) { voice in
-              Text(voice.name).tag(voice.id)
+          } else {
+            Section("Female") {
+              ForEach(ShortcutSettings.availableVoices.filter { $0.gender == .female }) { voice in
+                Text(voice.name).tag(voice.id)
+              }
+            }
+            Section("Male") {
+              ForEach(ShortcutSettings.availableVoices.filter { $0.gender == .male }) { voice in
+                Text(voice.name).tag(voice.id)
+              }
             }
           }
         }

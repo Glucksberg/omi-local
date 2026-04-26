@@ -4882,6 +4882,23 @@ extension APIClient {
     let modelId: String
     let outputFormat: String
     let voiceSettings: TtsVoiceSettings
+    let xaiVoiceId: String?
+
+    init(
+      text: String,
+      voiceId: String,
+      modelId: String,
+      outputFormat: String,
+      voiceSettings: TtsVoiceSettings,
+      xaiVoiceId: String? = nil
+    ) {
+      self.text = text
+      self.voiceId = voiceId
+      self.modelId = modelId
+      self.outputFormat = outputFormat
+      self.voiceSettings = voiceSettings
+      self.xaiVoiceId = xaiVoiceId
+    }
 
     enum CodingKeys: String, CodingKey {
       case text
@@ -4889,6 +4906,7 @@ extension APIClient {
       case modelId = "model_id"
       case outputFormat = "output_format"
       case voiceSettings = "voice_settings"
+      case xaiVoiceId = "xai_voice_id"
     }
   }
 
