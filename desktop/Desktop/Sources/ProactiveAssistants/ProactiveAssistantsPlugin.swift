@@ -198,6 +198,8 @@ public class ProactiveAssistantsPlugin: NSObject {
                 break
             }
         }
+
+        DesktopBackendEnvironment.applyReleaseChannelDefaults()
     }
 
 

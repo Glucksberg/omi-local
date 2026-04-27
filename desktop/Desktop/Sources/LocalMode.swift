@@ -111,6 +111,9 @@ enum LocalMode {
     if let raw = getenv("OMI_API_URL").flatMap({ String(validatingUTF8: $0) }), !raw.isEmpty {
       return raw.hasSuffix("/") ? raw : raw + "/"
     }
+    if let raw = getenv("OMI_DESKTOP_API_URL").flatMap({ String(validatingUTF8: $0) }), !raw.isEmpty {
+      return raw.hasSuffix("/") ? raw : raw + "/"
+    }
     return defaultLocalAPIURL
   }
 
