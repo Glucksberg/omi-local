@@ -108,6 +108,9 @@ web/app/public/firebase-messaging-sw.js
 *.swo
 *.swp
 *.tmp
+*.db
+*.sqlite
+*.sqlite3
 hs_err_pid*
 
 # Servers
