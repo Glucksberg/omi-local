@@ -62,9 +62,11 @@ actor RewindIndexer {
         // Set up power monitor to backfill OCR when AC reconnects
         setupPowerMonitorCallback()
 
-        // Kick off OCR embedding backfill in background
-        Task(priority: .background) {
-            await OCREmbeddingService.shared.backfillIfNeeded()
+        // Kick off OCR embedding backfill only when an AI proxy is available.
+        if !LocalMode.isEnabled || LocalMode.isAIProxyEnabled {
+            Task(priority: .background) {
+                await OCREmbeddingService.shared.backfillIfNeeded()
+            }
         }
 
         // Reduce ocrDataJson float precision for existing rows (one-time migration)
@@ -218,7 +220,8 @@ actor RewindIndexer {
             let inserted = try await RewindDatabase.shared.insertScreenshot(screenshot)
 
             // Embed OCR text for semantic search (non-blocking)
-            if let ocrText = ocrText, !ocrText.isEmpty, let id = inserted.id {
+            if (!LocalMode.isEnabled || LocalMode.isAIProxyEnabled),
+               let ocrText = ocrText, !ocrText.isEmpty, let id = inserted.id {
                 Task(priority: .utility) {
                     await OCREmbeddingService.shared.embedScreenshot(id: id, ocrText: ocrText, appName: frame.appName, windowTitle: frame.windowTitle)
                 }
@@ -299,7 +302,8 @@ actor RewindIndexer {
             let inserted = try await RewindDatabase.shared.insertScreenshot(screenshot)
 
             // Embed OCR text for semantic search (non-blocking)
-            if let ocrText = ocrText, !ocrText.isEmpty, let id = inserted.id {
+            if (!LocalMode.isEnabled || LocalMode.isAIProxyEnabled),
+               let ocrText = ocrText, !ocrText.isEmpty, let id = inserted.id {
                 Task(priority: .utility) {
                     await OCREmbeddingService.shared.embedScreenshot(id: id, ocrText: ocrText, appName: appName, windowTitle: windowTitle)
                 }
@@ -404,7 +408,8 @@ actor RewindIndexer {
             let inserted = try await RewindDatabase.shared.insertScreenshot(screenshot)
 
             // Embed OCR text for semantic search (non-blocking)
-            if let ocrText = ocrText, !ocrText.isEmpty, let id = inserted.id {
+            if (!LocalMode.isEnabled || LocalMode.isAIProxyEnabled),
+               let ocrText = ocrText, !ocrText.isEmpty, let id = inserted.id {
                 Task(priority: .utility) {
                     await OCREmbeddingService.shared.embedScreenshot(id: id, ocrText: ocrText, appName: frame.appName, windowTitle: frame.windowTitle)
                 }

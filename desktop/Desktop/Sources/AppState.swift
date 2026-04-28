@@ -230,6 +230,9 @@ class AppState: ObservableObject {
     // Register as the current instance so background services can check recording state
     AppState.current = self
 
+    // Resolve beta/stable before loading backend URLs so beta releases use dev services.
+    AppBuild.prepareUpdateChannelForBackendRouting()
+
     // Load API key from environment or .env file
     loadEnvironment()
     LocalNetworkPolicy.installIfNeeded()
@@ -487,6 +490,7 @@ class AppState: ObservableObject {
     if LocalMode.isEnabled {
       log("Environment loaded for local mode")
     } else {
+      DesktopBackendEnvironment.applyReleaseChannelDefaults()
       log("Environment loaded (API keys will be fetched from backend after auth)")
     }
   }
