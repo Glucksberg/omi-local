@@ -2377,7 +2377,7 @@ A screenshot may be attached — use it silently only if relevant. Never mention
 
     // MARK: - Send Message
 
-    /// Run a headless OpenClaw-style heartbeat turn.
+    /// Run a headless omi-local heartbeat turn.
     ///
     /// This does not append chat UI messages and does not persist messages. The scheduler
     /// decides whether to drop HEARTBEAT_OK or surface the returned alert.
@@ -2400,10 +2400,14 @@ A screenshot may be attached — use it silently only if relevant. Never mention
         let heartbeatSettings = HeartbeatSettings.shared
         let memoryDirectory = heartbeatSettings.memoryDirectory
         let heartbeatFilePath = heartbeatSettings.heartbeatFilePath
+        let runLogFilePath = heartbeatSettings.runLogFilePath
         let memoryWrites = heartbeatSettings.allowMemoryWrites ? "allowed" : "disabled"
         let memoryWriteInstructions = heartbeatSettings.allowMemoryWrites
             ? """
 You may consolidate durable memories by creating or updating Markdown files under `\(memoryDirectory)` only.
+Allowed write targets are Markdown files such as MEMORY.md, HEARTBEAT.md, USER.md, project notes, and daily memory notes.
+Do not write binary files, databases, credentials, logs, or generated artifacts.
+Do not edit `\(runLogFilePath)`; the app appends the heartbeat audit summary automatically after the turn.
 Bash is blocked during heartbeat. Use read/grep/find/ls and Omi read-only tools for context.
 Prefer the write/edit tools for memory files. Do not use shell redirection for memory writes.
 Never write outside `\(memoryDirectory)`.
@@ -2419,6 +2423,7 @@ Memory file writes are disabled for this heartbeat. Bash is blocked. Read contex
 You are running a scheduled heartbeat for Markus.
 Read `\(heartbeatFilePath)` if it exists and follow it strictly.
 Use lightweight context. Do not repeat old alerts. Do not invent tasks.
+The app will append an audit summary to `\(runLogFilePath)` after this turn; do not manually write the run log.
 \(memoryWriteInstructions)
 If nothing needs Markus's attention, reply exactly `HEARTBEAT_OK`.
 If something matters, reply with one concise alert in Brazilian Portuguese, max 500 chars.
@@ -2427,7 +2432,7 @@ Never perform destructive actions, sends, purchases, credential changes, or prod
 """
 
         let prompt = """
-Read `\(heartbeatFilePath)` if it exists. Check only safe, useful background context. If nothing needs attention, reply HEARTBEAT_OK. Otherwise return one concise alert for Markus.
+Read `\(heartbeatFilePath)` if it exists. Check only safe, useful background context. Consolidate useful memory only if it belongs inside TomMemory and the heartbeat allows memory writes. If nothing needs attention, reply HEARTBEAT_OK. Otherwise return one concise alert for Markus.
 """
 
         let activityRecorder = HeartbeatToolActivityRecorder()

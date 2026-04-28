@@ -2443,7 +2443,7 @@ struct SettingsContentView: View {
               Text("Heartbeats")
                 .scaledFont(size: 15, weight: .semibold)
                 .foregroundColor(OmiColors.textPrimary)
-              Text("Let Tom periodically check HEARTBEAT.md and alert only when something matters.")
+              Text("Let Tom check HEARTBEAT.md, consolidate TomMemory, and alert only when something matters.")
                 .scaledFont(size: 12)
                 .foregroundColor(OmiColors.textTertiary)
             }
@@ -2568,6 +2568,9 @@ struct SettingsContentView: View {
                 .scaledFont(size: 11, weight: .medium)
                 .foregroundColor(OmiColors.textTertiary)
                 .padding(.top, 4)
+              Text("Appended automatically after every heartbeat turn")
+                .scaledFont(size: 11)
+                .foregroundColor(OmiColors.textTertiary.opacity(0.85))
               Text(heartbeatSettings.runLogFilePath)
                 .scaledFont(size: 11, design: .monospaced)
                 .foregroundColor(OmiColors.textTertiary)
