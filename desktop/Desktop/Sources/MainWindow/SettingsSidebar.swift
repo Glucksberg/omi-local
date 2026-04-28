@@ -210,25 +210,25 @@ struct SettingsSearchItem: Identifiable {
       settingId: "advanced.stats"),
     SettingsSearchItem(
       name: "AI Provider", subtitle: "Choose between your omi account and Claude for desktop chat",
-      keywords: ["provider", "agent sdk", "claude code", "acp", "bridge mode"], section: .advanced,
+      keywords: ["provider", "agent sdk", "claude code", "acp", "bridge mode"], section: .aiChat,
       icon: "cpu", settingId: "aichat.provider"),
     SettingsSearchItem(
       name: "Workspace", subtitle: "Set a project directory for desktop chat context",
       keywords: ["workspace", "project", "directory", "folder", "working directory"],
-      section: .advanced, icon: "cpu", settingId: "aichat.workspace"),
+      section: .aiChat, icon: "cpu", settingId: "aichat.workspace"),
     SettingsSearchItem(
-      name: "Heartbeats", subtitle: "Let Tom check in periodically like OpenClaw",
-      keywords: ["heartbeat", "openclaw", "scheduled", "background", "tom", "agent"],
+      name: "Heartbeats", subtitle: "Periodic local memory check-ins and alerts",
+      keywords: ["heartbeat", "memory", "scheduled", "background", "tom", "agent"],
       section: .aiChat, icon: "heart.text.square", settingId: "aichat.heartbeats"),
     SettingsSearchItem(
       name: "Browser Extension",
       subtitle: "Lets the AI use your Chrome browser with all your logged-in sessions",
       keywords: [
         "playwright", "chrome", "browser extension", "browser", "set up", "reconfigure", "token",
-      ], section: .advanced, icon: "cpu", settingId: "aichat.browserextension"),
+      ], section: .aiChat, icon: "cpu", settingId: "aichat.browserextension"),
     SettingsSearchItem(
       name: "Dev Mode", subtitle: "Developer tools and debugging options",
-      keywords: ["developer", "debug", "dev mode", "development"], section: .advanced, icon: "cpu",
+      keywords: ["developer", "debug", "dev mode", "development"], section: .aiChat, icon: "cpu",
       settingId: "aichat.devmode"),
     SettingsSearchItem(
       name: "Goals", subtitle: "Track personal goals with AI-powered progress detection",

@@ -1904,7 +1904,8 @@ A screenshot may be attached — use it silently only if relevant. Never mention
         }
 
         if multiChatEnabled {
-            // Multi-chat mode: load sessions, default to default chat
+            // Multi-chat mode: cloud builds default to the synced chat;
+            // omi-local defaults to explicit local sessions.
             await fetchSessions()
             if LocalMode.isEnabled {
                 if sessions.isEmpty {
@@ -3355,9 +3356,16 @@ Read `\(heartbeatFilePath)` if it exists. Check only safe, useful background con
         isInDefaultChat = true
 
         if multiChatEnabled {
-            // Multi-chat mode: load sessions, then switch to default chat
+            // Multi-chat mode: cloud builds keep the synced default chat;
+            // omi-local keeps every chat as an explicit local session.
             await fetchSessions()
-            await switchToDefaultChat()
+            if LocalMode.isEnabled {
+                if sessions.isEmpty {
+                    _ = await createNewSession(title: "Home Chat", skipGreeting: true, appId: appId)
+                }
+            } else {
+                await switchToDefaultChat()
+            }
         } else {
             // Single chat mode: just load default chat messages
             await loadDefaultChatMessages()

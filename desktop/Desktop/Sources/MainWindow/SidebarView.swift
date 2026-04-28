@@ -19,8 +19,8 @@ enum SidebarNavItem: Int, CaseIterable {
   var title: String {
     switch self {
     case .dashboard: return "Home"
-    case .conversations: return "Conversations"
-    case .chat: return "Chat"
+    case .conversations: return LocalMode.isEnabled ? "Ambient" : "Conversations"
+    case .chat: return "AI Chat"
     case .memories: return "Memories"
     case .tasks: return "Tasks"
     case .focus: return "Focus"
@@ -67,7 +67,7 @@ enum SidebarNavItem: Int, CaseIterable {
 
   /// Items shown in the main navigation (top section)
   static var mainItems: [SidebarNavItem] {
-    [.dashboard, .conversations, .memories, .tasks, .rewind, .apps]
+    [.dashboard, .chat, .conversations, .memories, .tasks, .rewind, .apps]
   }
 }
 

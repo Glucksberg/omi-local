@@ -251,8 +251,27 @@ struct ChatPage: View {
     HStack {
       // Multi-chat mode controls
       if chatProvider.multiChatEnabled {
-        // Default Chat indicator or button
-        if chatProvider.isInDefaultChat {
+        if LocalMode.isEnabled {
+          HStack(spacing: 6) {
+            Image(systemName: "internaldrive")
+              .scaledFont(size: 11)
+            Text("Local Chat")
+              .scaledFont(size: 11, weight: .medium)
+          }
+          .foregroundColor(OmiColors.success)
+          .padding(.horizontal, 8)
+          .padding(.vertical, 4)
+          .background(OmiColors.success.opacity(0.15))
+          .cornerRadius(6)
+          .help("Stored in the omi-local database on this Mac")
+
+          if let session = chatProvider.currentSession {
+            Text(session.title)
+              .scaledFont(size: 12, weight: .medium)
+              .foregroundColor(OmiColors.textSecondary)
+              .lineLimit(1)
+          }
+        } else if chatProvider.isInDefaultChat {
           // Show indicator that we're in default chat
           HStack(spacing: 6) {
             Image(systemName: "icloud")

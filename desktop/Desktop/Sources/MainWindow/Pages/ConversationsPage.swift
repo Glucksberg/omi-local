@@ -191,7 +191,7 @@ struct ConversationsPage: View {
     VStack(spacing: 0) {
       // Conversations header
       HStack {
-        Text("Conversations")
+        Text(LocalMode.isEnabled ? "Ambient Transcriptions" : "Conversations")
           .scaledFont(size: 18, weight: .semibold)
           .foregroundColor(OmiColors.textPrimary)
 
