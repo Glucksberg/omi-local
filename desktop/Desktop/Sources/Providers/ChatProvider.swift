@@ -614,7 +614,7 @@ A screenshot may be attached — use it silently only if relevant. Never mention
     @AppStorage("chatBridgeMode") var bridgeMode: String = BridgeMode.piMono.rawValue
 
     var isUsingOmiAccountProvider: Bool {
-        bridgeMode != BridgeMode.userClaude.rawValue
+        !LocalMode.isEnabled && bridgeMode != BridgeMode.userClaude.rawValue
     }
 
     /// Whether the agent bridge requires authentication (shown as sheet in UI)

@@ -67,7 +67,10 @@ enum SidebarNavItem: Int, CaseIterable {
 
   /// Items shown in the main navigation (top section)
   static var mainItems: [SidebarNavItem] {
-    [.dashboard, .chat, .conversations, .memories, .tasks, .rewind, .apps]
+    if LocalMode.isEnabled {
+      return [.dashboard, .chat, .conversations, .memories, .tasks, .rewind, .apps]
+    }
+    return [.dashboard, .conversations, .memories, .tasks, .rewind, .apps]
   }
 }
 
