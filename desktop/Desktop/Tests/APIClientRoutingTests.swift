@@ -500,6 +500,20 @@ final class APIClientRoutingTests: XCTestCase {
                      label: "createChatSession")
     }
 
+    func testCreateChatSessionSendsAppIdAsSnakeCase() async throws {
+        let client = await makeTestClient()
+        _ = try? await client.createChatSession(title: "Local Chat", appId: "omi-local") as ChatSession
+
+        let captured = try XCTUnwrap(URLCapture.capturedRequests.first)
+        let body = try XCTUnwrap(captured.body)
+        let json = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: body) as? [String: Any]
+        )
+        XCTAssertEqual(json["title"] as? String, "Local Chat")
+        XCTAssertEqual(json["app_id"] as? String, "omi-local")
+        XCTAssertNil(json["appId"])
+    }
+
     func testDeleteChatSessionRoutesToPython() async {
         let client = await makeTestClient()
         try? await client.deleteChatSession(sessionId: "sess-1")
@@ -516,6 +530,41 @@ final class APIClientRoutingTests: XCTestCase {
         assertRoutes(URLCapture.capturedRequests, host: "python-test", port: 9001,
                      pathContains: "v2/desktop/messages", method: "DELETE",
                      label: "deleteMessages")
+    }
+
+    func testGetMessagesForSessionRoutesWithSessionId() async {
+        let client = await makeTestClient()
+        _ = try? await client.getMessages(sessionId: "local-default-chat", limit: 25, offset: 5) as [ChatMessageDB]
+        assertRoutes(URLCapture.capturedRequests, host: "python-test", port: 9001,
+                     pathContains: "v2/desktop/messages", method: "GET",
+                     label: "getMessages(sessionId:)")
+        let url = URLCapture.capturedRequests.first?.url.absoluteString ?? ""
+        XCTAssertTrue(url.contains("session_id=local-default-chat"))
+        XCTAssertTrue(url.contains("limit=25"))
+        XCTAssertTrue(url.contains("offset=5"))
+    }
+
+    func testSaveMessageSendsSessionIdAsSnakeCase() async throws {
+        let client = await makeTestClient()
+        _ = try? await client.saveMessage(
+            text: "hello",
+            sender: "human",
+            appId: nil,
+            sessionId: "local-default-chat"
+        ) as SaveMessageResponse
+
+        assertRoutes(URLCapture.capturedRequests, host: "python-test", port: 9001,
+                     pathContains: "v2/desktop/messages", method: "POST",
+                     label: "saveMessage")
+        let captured = try XCTUnwrap(URLCapture.capturedRequests.first)
+        let body = try XCTUnwrap(captured.body)
+        let json = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: body) as? [String: Any]
+        )
+        XCTAssertEqual(json["text"] as? String, "hello")
+        XCTAssertEqual(json["sender"] as? String, "human")
+        XCTAssertEqual(json["session_id"] as? String, "local-default-chat")
+        XCTAssertNil(json["sessionId"])
     }
 
     // -- LLM usage (GET → Python, migrated from Rust) --
