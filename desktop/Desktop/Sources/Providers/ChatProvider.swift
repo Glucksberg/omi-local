@@ -724,6 +724,11 @@ A screenshot may be attached — use it silently only if relevant. Never mention
     init() {
         log("ChatProvider initialized, will start Claude bridge on first use")
 
+        if LocalMode.isEnabled, UserDefaults.standard.object(forKey: "multiChatEnabled") == nil {
+            UserDefaults.standard.set(true, forKey: "multiChatEnabled")
+            log("ChatProvider: enabled multi-chat by default for omi-local")
+        }
+
         // Migrate legacy "agentSDK" persisted mode to the new default "piMono".
         // Pre-6594 installs may have the old agentSDK tag saved; the settings
         // picker no longer offers it, so leaving it stored would leave the UI
@@ -1897,8 +1902,14 @@ A screenshot may be attached — use it silently only if relevant. Never mention
         if multiChatEnabled {
             // Multi-chat mode: load sessions, default to default chat
             await fetchSessions()
-            // Start in default chat mode
-            await switchToDefaultChat()
+            if LocalMode.isEnabled {
+                if sessions.isEmpty {
+                    _ = await createNewSession(title: "Home Chat", skipGreeting: true)
+                }
+            } else {
+                // Start in default chat mode
+                await switchToDefaultChat()
+            }
         } else {
             // Single chat mode: just load default chat messages (syncs with Flutter)
             isLoadingSessions = false

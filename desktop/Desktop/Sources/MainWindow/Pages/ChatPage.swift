@@ -118,48 +118,57 @@ struct ChatPage: View {
   }
 
   var body: some View {
-    VStack(spacing: 0) {
-      // Header with app picker
-      chatHeader
-        .padding(.horizontal, 24)
-        .padding(.top, 24)
-        .padding(.bottom, 18)
+    HStack(spacing: 0) {
+      if LocalMode.isEnabled && chatProvider.multiChatEnabled {
+        ChatSessionsSidebar(chatProvider: chatProvider)
 
-      Divider()
-        .background(OmiColors.border.opacity(0.4))
-
-      // Messages area
-      messagesView
-
-      // Error banner
-      if let error = chatProvider.errorMessage {
-        HStack(spacing: 8) {
-          Image(systemName: "exclamationmark.triangle.fill")
-            .foregroundColor(OmiColors.warning)
-            .scaledFont(size: 14)
-          Text(error)
-            .scaledFont(size: 13)
-            .foregroundColor(OmiColors.textSecondary)
-          Spacer()
-          Button {
-            chatProvider.errorMessage = nil
-          } label: {
-            Image(systemName: "xmark")
-              .scaledFont(size: 11)
-              .foregroundColor(OmiColors.textTertiary)
-          }
-          .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(OmiColors.backgroundSecondary)
+        Divider()
+          .background(OmiColors.border.opacity(0.4))
       }
 
-      // Input area
-      inputArea
-        .padding(.horizontal, 24)
-        .padding(.top, 16)
-        .padding(.bottom, 24)
+      VStack(spacing: 0) {
+        // Header with app picker
+        chatHeader
+          .padding(.horizontal, 24)
+          .padding(.top, 24)
+          .padding(.bottom, 18)
+
+        Divider()
+          .background(OmiColors.border.opacity(0.4))
+
+        // Messages area
+        messagesView
+
+        // Error banner
+        if let error = chatProvider.errorMessage {
+          HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+              .foregroundColor(OmiColors.warning)
+              .scaledFont(size: 14)
+            Text(error)
+              .scaledFont(size: 13)
+              .foregroundColor(OmiColors.textSecondary)
+            Spacer()
+            Button {
+              chatProvider.errorMessage = nil
+            } label: {
+              Image(systemName: "xmark")
+                .scaledFont(size: 11)
+                .foregroundColor(OmiColors.textTertiary)
+            }
+            .buttonStyle(.plain)
+          }
+          .padding(.horizontal, 16)
+          .padding(.vertical, 10)
+          .background(OmiColors.backgroundSecondary)
+        }
+
+        // Input area
+        inputArea
+          .padding(.horizontal, 24)
+          .padding(.top, 16)
+          .padding(.bottom, 24)
+      }
     }
     .background(OmiColors.backgroundPrimary)
     .sheet(item: $citedConversation) { conversation in

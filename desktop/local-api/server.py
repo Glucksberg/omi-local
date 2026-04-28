@@ -147,6 +147,74 @@ class LocalStore:
                 );
                 """
             )
+            self._backfill_default_chat_session_in_conn(conn)
+
+    def _backfill_default_chat_session_in_conn(self, conn: sqlite3.Connection) -> None:
+        """Attach legacy default-chat messages to an explicit local chat session."""
+        legacy_count = conn.execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM messages
+            WHERE session_id IS NULL OR session_id = ''
+            """
+        ).fetchone()["total"]
+        if not legacy_count:
+            return
+
+        session_id = "local-default-chat"
+        first = conn.execute(
+            """
+            SELECT text, created_at
+            FROM messages
+            WHERE session_id IS NULL OR session_id = ''
+            ORDER BY created_at ASC
+            LIMIT 1
+            """
+        ).fetchone()
+        last = conn.execute(
+            """
+            SELECT text, created_at
+            FROM messages
+            WHERE session_id IS NULL OR session_id = ''
+            ORDER BY created_at DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        created_at = first["created_at"] if first else utc_now()
+        updated_at = last["created_at"] if last else created_at
+        preview = last["text"] if last else None
+        title = title_from_messages([{"text": first["text"]}]) if first else "Legacy Home Chat"
+        if title == "New Chat":
+            title = "Legacy Home Chat"
+
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO chat_sessions
+                (id, title, preview, app_id, message_count, starred, created_at, updated_at)
+            VALUES (?, ?, ?, NULL, 0, 0, ?, ?)
+            """,
+            (session_id, title, preview, created_at, updated_at),
+        )
+        conn.execute(
+            """
+            UPDATE messages
+            SET session_id = ?
+            WHERE session_id IS NULL OR session_id = ''
+            """,
+            (session_id,),
+        )
+        conn.execute(
+            """
+            UPDATE chat_sessions
+            SET preview = ?,
+                message_count = (
+                    SELECT COUNT(*) FROM messages WHERE session_id = ?
+                ),
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (preview, session_id, updated_at, session_id),
+        )
 
     def create_session(self, title: str | None, app_id: str | None, session_id: str | None = None) -> dict[str, Any]:
         now = utc_now()
