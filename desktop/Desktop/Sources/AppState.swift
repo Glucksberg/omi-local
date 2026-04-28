@@ -1943,7 +1943,8 @@ class AppState: ObservableObject {
           try await TranscriptionStorage.shared.getLocalConversations(
             limit: 50,
             starredOnly: self.showStarredOnly,
-            folderId: self.selectedFolderId
+            folderId: self.selectedFolderId,
+            includeUnsyncedLocal: LocalMode.isEnabled
           )
         }
         group.addTask {
@@ -1961,7 +1962,8 @@ class AppState: ObservableObject {
 
         // Get local count
         let localCount = try await TranscriptionStorage.shared.getLocalConversationsCount(
-          starredOnly: showStarredOnly)
+          starredOnly: showStarredOnly,
+          includeUnsyncedLocal: LocalMode.isEnabled)
         totalConversationsCount = localCount
 
         // Stop loading state so UI shows cached data immediately
@@ -2073,13 +2075,15 @@ class AppState: ObservableObject {
         let localConversations = try await TranscriptionStorage.shared.getLocalConversations(
           limit: max(50, conversations.count),
           starredOnly: showStarredOnly,
-          folderId: selectedFolderId
+          folderId: selectedFolderId,
+          includeUnsyncedLocal: true
         )
         if localConversations != conversations {
           conversations = localConversations
         }
         totalConversationsCount = try await TranscriptionStorage.shared.getLocalConversationsCount(
-          starredOnly: showStarredOnly
+          starredOnly: showStarredOnly,
+          includeUnsyncedLocal: true
         )
         log("Conversations: omi-local auto-refresh loaded \(localConversations.count) from SQLite")
       } catch {

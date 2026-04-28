@@ -458,8 +458,18 @@ extension TranscriptionSegmentRecord {
 extension TranscriptionSessionRecord {
     /// Convert local record back to ServerConversation for UI display
     /// Requires segments to be passed in (fetched separately)
-    func toServerConversation(segments: [TranscriptionSegmentRecord]) -> ServerConversation? {
-        guard let backendId = backendId else { return nil }
+    func toServerConversation(
+        segments: [TranscriptionSegmentRecord],
+        allowLocalPlaceholderId: Bool = false
+    ) -> ServerConversation? {
+        let conversationId: String
+        if let backendId {
+            conversationId = backendId
+        } else if allowLocalPlaceholderId, let id {
+            conversationId = "local_session_\(id)"
+        } else {
+            return nil
+        }
 
         let decoder = JSONDecoder()
 
@@ -487,14 +497,22 @@ extension TranscriptionSessionRecord {
 
         // Convert segments
         let transcriptSegments = segments.map { $0.toTranscriptSegment() }
+        let displayTitle: String
+        if let title, !title.isEmpty {
+            displayTitle = title
+        } else if self.status == .recording {
+            displayTitle = "Recording now"
+        } else {
+            displayTitle = ""
+        }
 
         return ServerConversation(
-            id: backendId,
+            id: conversationId,
             createdAt: createdAt,
             startedAt: startedAt,
             finishedAt: finishedAt,
             structured: Structured(
-                title: title ?? "",
+                title: displayTitle,
                 overview: overview ?? "",
                 emoji: emoji ?? "",
                 category: category ?? "other",

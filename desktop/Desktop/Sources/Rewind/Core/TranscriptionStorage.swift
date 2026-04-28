@@ -776,15 +776,23 @@ actor TranscriptionStorage {
         limit: Int = 50,
         offset: Int = 0,
         starredOnly: Bool = false,
-        folderId: String? = nil
+        folderId: String? = nil,
+        includeUnsyncedLocal: Bool = false
     ) async throws -> [ServerConversation] {
         let db = try await ensureInitialized()
 
         return try await db.read { database in
             var query = TranscriptionSessionRecord
-                .filter(Column("backendSynced") == true)
                 .filter(Column("deleted") == false)
                 .filter(Column("discarded") == false)
+
+            if includeUnsyncedLocal {
+                query = query.filter(
+                    Column("backendSynced") == true || Column("status") == TranscriptionSessionStatus.recording.rawValue
+                )
+            } else {
+                query = query.filter(Column("backendSynced") == true)
+            }
 
             if starredOnly {
                 query = query.filter(Column("starred") == true)
@@ -803,7 +811,10 @@ actor TranscriptionStorage {
             // Segments are only needed for conversation detail view, not list view
             // This makes the query O(1) instead of O(N) for much faster loading
             return sessions.compactMap { session in
-                session.toServerConversation(segments: [])
+                session.toServerConversation(
+                    segments: [],
+                    allowLocalPlaceholderId: includeUnsyncedLocal
+                )
             }
         }
     }
@@ -813,32 +824,48 @@ actor TranscriptionStorage {
         let db = try await ensureInitialized()
 
         return try await db.read { database in
-            guard let session = try TranscriptionSessionRecord
-                .filter(Column("backendId") == backendId)
-                .fetchOne(database),
-                let sessionId = session.id
-            else {
-                return nil
+            let session: TranscriptionSessionRecord?
+            if let localId = Self.localSessionId(from: backendId) {
+                session = try TranscriptionSessionRecord.fetchOne(database, key: localId)
+            } else {
+                session = try TranscriptionSessionRecord
+                    .filter(Column("backendId") == backendId)
+                    .fetchOne(database)
             }
+
+            guard let session, let sessionId = session.id else { return nil }
 
             let segments = try TranscriptionSegmentRecord
                 .filter(Column("sessionId") == sessionId)
                 .order(Column("segmentOrder").asc)
                 .fetchAll(database)
 
-            return session.toServerConversation(segments: segments)
+            return session.toServerConversation(
+                segments: segments,
+                allowLocalPlaceholderId: true
+            )
         }
     }
 
     /// Get count of local conversations
-    func getLocalConversationsCount(starredOnly: Bool = false) async throws -> Int {
+    func getLocalConversationsCount(
+        starredOnly: Bool = false,
+        includeUnsyncedLocal: Bool = false
+    ) async throws -> Int {
         let db = try await ensureInitialized()
 
         return try await db.read { database in
             var query = TranscriptionSessionRecord
-                .filter(Column("backendSynced") == true)
                 .filter(Column("deleted") == false)
                 .filter(Column("discarded") == false)
+
+            if includeUnsyncedLocal {
+                query = query.filter(
+                    Column("backendSynced") == true || Column("status") == TranscriptionSessionStatus.recording.rawValue
+                )
+            } else {
+                query = query.filter(Column("backendSynced") == true)
+            }
 
             if starredOnly {
                 query = query.filter(Column("starred") == true)
@@ -846,5 +873,10 @@ actor TranscriptionStorage {
 
             return try query.fetchCount(database)
         }
+    }
+
+    private static func localSessionId(from conversationId: String) -> Int64? {
+        guard conversationId.hasPrefix("local_session_") else { return nil }
+        return Int64(conversationId.dropFirst("local_session_".count))
     }
 }
