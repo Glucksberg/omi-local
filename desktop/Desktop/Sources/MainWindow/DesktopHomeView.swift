@@ -179,9 +179,7 @@ struct DesktopHomeView: View {
               // Start proactive assistants monitoring if enabled in settings.
               // If API keys aren't loaded yet, this may fail — onChange below retries.
               if settings.screenAnalysisEnabled {
-                if LocalMode.isEnabled && !LocalMode.isAIProxyEnabled {
-                  log("DesktopHomeView: Screen analysis paused in omi-local until local AI proxy is configured")
-                } else if APIKeyService.keysAvailable {
+                if APIKeyService.keysAvailable {
                   ProactiveAssistantsPlugin.shared.startMonitoring { success, error in
                     if success {
                       log("DesktopHomeView: Screen analysis started")
@@ -243,8 +241,7 @@ struct DesktopHomeView: View {
               // but monitoring is not running. Handles the case where the user granted
               // screen recording permission in System Settings and switched back.
               let plugin = ProactiveAssistantsPlugin.shared
-              if AssistantSettings.shared.screenAnalysisEnabled && !plugin.isMonitoring
-                && !(LocalMode.isEnabled && !LocalMode.isAIProxyEnabled) {
+              if AssistantSettings.shared.screenAnalysisEnabled && !plugin.isMonitoring {
                 plugin.refreshScreenRecordingPermission()
                 if plugin.hasScreenRecordingPermission {
                   log("DesktopHomeView: Permission available on app active — starting monitoring")
@@ -262,8 +259,7 @@ struct DesktopHomeView: View {
               }
               // Retry screen analysis
               let plugin = ProactiveAssistantsPlugin.shared
-              if AssistantSettings.shared.screenAnalysisEnabled && !plugin.isMonitoring
-                && !(LocalMode.isEnabled && !LocalMode.isAIProxyEnabled) {
+              if AssistantSettings.shared.screenAnalysisEnabled && !plugin.isMonitoring {
                 plugin.startMonitoring { success, error in
                   if success {
                     log("DesktopHomeView: Screen analysis started (after key load)")

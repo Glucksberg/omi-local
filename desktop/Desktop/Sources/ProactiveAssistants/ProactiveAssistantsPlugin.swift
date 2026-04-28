@@ -233,15 +233,6 @@ public class ProactiveAssistantsPlugin: NSObject {
             return
         }
 
-        if LocalMode.isEnabled && !LocalMode.isAIProxyEnabled {
-            if !hasLoggedLocalAIDisabled {
-                log("ProactiveAssistantsPlugin: omi-local screen analysis paused until local AI proxy is configured")
-                hasLoggedLocalAIDisabled = true
-            }
-            completion(false, "Local AI proxy is not configured")
-            return
-        }
-
         // Set flag synchronously before async call to prevent race condition
         isStartingMonitoring = true
 
@@ -370,61 +361,67 @@ public class ProactiveAssistantsPlugin: NSObject {
         // Initialize services
         screenCaptureService = ScreenCaptureService()
 
-        do {
-            focusAssistant = try FocusAssistant(
-                onAlert: { [weak self] message in
-                    self?.sendEvent(type: "alert", data: ["message": message])
-                },
-                onStatusChange: { [weak self] status in
-                    Task { @MainActor in
-                        self?.lastStatus = status
-                        self?.sendEvent(type: "statusChange", data: ["status": status.rawValue])
+        let aiAssistantsEnabled = !LocalMode.isEnabled || LocalMode.isAIProxyEnabled
+        if aiAssistantsEnabled {
+            do {
+                focusAssistant = try FocusAssistant(
+                    onAlert: { [weak self] message in
+                        self?.sendEvent(type: "alert", data: ["message": message])
+                    },
+                    onStatusChange: { [weak self] status in
+                        Task { @MainActor in
+                            self?.lastStatus = status
+                            self?.sendEvent(type: "statusChange", data: ["status": status.rawValue])
+                        }
+                    },
+                    onRefocus: {
+                        Task { @MainActor in
+                            OverlayService.shared.showGlowAroundActiveWindow(colorMode: .focused)
+                        }
+                    },
+                    onDistraction: {
+                        Task { @MainActor in
+                            OverlayService.shared.showGlowAroundActiveWindow(colorMode: .distracted)
+                        }
                     }
-                },
-                onRefocus: {
-                    Task { @MainActor in
-                        OverlayService.shared.showGlowAroundActiveWindow(colorMode: .focused)
-                    }
-                },
-                onDistraction: {
-                    Task { @MainActor in
-                        OverlayService.shared.showGlowAroundActiveWindow(colorMode: .distracted)
-                    }
+                )
+
+                if let focus = focusAssistant {
+                    AssistantCoordinator.shared.register(focus)
                 }
-            )
 
-            if let focus = focusAssistant {
-                AssistantCoordinator.shared.register(focus)
+                taskAssistant = try TaskAssistant()
+
+                if let task = taskAssistant {
+                    AssistantCoordinator.shared.register(task)
+                }
+
+                Task { await TaskDeduplicationService.shared.start() }
+                Task { await TaskPrioritizationService.shared.start() }
+                Task { await TaskPromotionService.shared.start() }
+
+                insightAssistant = try InsightAssistant()
+
+                if let insight = insightAssistant {
+                    AssistantCoordinator.shared.register(insight)
+                }
+
+                memoryAssistant = try MemoryAssistant()
+
+                if let memory = memoryAssistant {
+                    AssistantCoordinator.shared.register(memory)
+                }
+
+            } catch {
+                log("ProactiveAssistantsPlugin: Failed to initialize assistants: \(error.localizedDescription)")
+                logError("ProactiveAssistantsPlugin: Assistant initialization failed", error: error)
+                isStartingMonitoring = false
+                completion(false, error.localizedDescription)
+                return
             }
-
-            taskAssistant = try TaskAssistant()
-
-            if let task = taskAssistant {
-                AssistantCoordinator.shared.register(task)
-            }
-
-            Task { await TaskDeduplicationService.shared.start() }
-            Task { await TaskPrioritizationService.shared.start() }
-            Task { await TaskPromotionService.shared.start() }
-
-            insightAssistant = try InsightAssistant()
-
-            if let insight = insightAssistant {
-                AssistantCoordinator.shared.register(insight)
-            }
-
-            memoryAssistant = try MemoryAssistant()
-
-            if let memory = memoryAssistant {
-                AssistantCoordinator.shared.register(memory)
-            }
-
-        } catch {
-            log("ProactiveAssistantsPlugin: Failed to initialize assistants: \(error.localizedDescription)")
-            logError("ProactiveAssistantsPlugin: Assistant initialization failed", error: error)
-            isStartingMonitoring = false
-            completion(false, error.localizedDescription)
-            return
+        } else if !hasLoggedLocalAIDisabled {
+            log("ProactiveAssistantsPlugin: omi-local capture-only mode; AI assistants disabled until local AI proxy is configured")
+            hasLoggedLocalAIDisabled = true
         }
 
         // Get initial app state
