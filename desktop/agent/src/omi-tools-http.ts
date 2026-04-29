@@ -136,6 +136,29 @@ Use after finding the task with execute_sql. Pass the backendId from the action_
       required: ["task_id"],
     },
   },
+  {
+    name: "review_conversation_candidate",
+    description: `Mark an ambient-derived conversation candidate as reviewed after inspection.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        candidate_id: {
+          type: "number",
+          description: "The id from conversation_candidates",
+        },
+        status: {
+          type: "string",
+          enum: ["promoted", "rejected", "dismissed"],
+          description: "Review outcome for this candidate",
+        },
+        promoted_to: {
+          type: "string",
+          description: "Optional target reference, e.g. memory:123 or action_item:456",
+        },
+      },
+      required: ["candidate_id", "status"],
+    },
+  },
 ];
 
 /** Handle a JSON-RPC request */
@@ -228,6 +251,20 @@ async function handleJsonRpc(
       if (toolName === "delete_task") {
         const taskId = args.task_id as string;
         const result = await requestSwiftTool("delete_task", { task_id: taskId });
+        return {
+          jsonrpc: "2.0",
+          id,
+          result: { content: [{ type: "text", text: result }] },
+        };
+      }
+
+      if (toolName === "review_conversation_candidate") {
+        const input: Record<string, unknown> = {
+          candidate_id: args.candidate_id,
+          status: args.status,
+        };
+        if (args.promoted_to) input.promoted_to = args.promoted_to;
+        const result = await requestSwiftTool("review_conversation_candidate", input);
         return {
           jsonrpc: "2.0",
           id,

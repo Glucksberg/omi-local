@@ -277,6 +277,34 @@ Use after finding the task with execute_sql. Pass the backendId from the action_
       required: ["task_id"],
     },
   },
+  {
+    name: "review_conversation_candidate",
+    description: `Mark an ambient-derived conversation candidate as reviewed.
+
+Use after inspecting conversation_candidates and, when needed, the source transcription_segments.
+- status=promoted only after creating/updating the durable memory or task elsewhere
+- status=rejected for false positives
+- status=dismissed for low-value candidates that should not alert again`,
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        candidate_id: {
+          type: "number" as const,
+          description: "The id from conversation_candidates",
+        },
+        status: {
+          type: "string" as const,
+          enum: ["promoted", "rejected", "dismissed"],
+          description: "Review outcome for this candidate",
+        },
+        promoted_to: {
+          type: "string" as const,
+          description: "Optional target reference, e.g. memory:123 or action_item:456",
+        },
+      },
+      required: ["candidate_id", "status"],
+    },
+  },
   // --- Backend RAG tools (call Python backend /v1/tools/* via Swift) ---
   // Tool order follows backend CORE_TOOLS for prompt cache stability.
   {
@@ -754,6 +782,20 @@ async function handleJsonRpc(
       } else if (toolName === "delete_task") {
         const taskId = args.task_id as string;
         const result = await requestSwiftTool("delete_task", { task_id: taskId });
+        if (!isNotification) {
+          send({
+            jsonrpc: "2.0",
+            id,
+            result: { content: [{ type: "text", text: result }] },
+          });
+        }
+      } else if (toolName === "review_conversation_candidate") {
+        const input: Record<string, unknown> = {
+          candidate_id: args.candidate_id,
+          status: args.status,
+        };
+        if (args.promoted_to) input.promoted_to = args.promoted_to;
+        const result = await requestSwiftTool("review_conversation_candidate", input);
         if (!isNotification) {
           send({
             jsonrpc: "2.0",

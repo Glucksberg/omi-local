@@ -59,6 +59,9 @@ class ChatToolExecutor {
     case "delete_task":
       return await executeDeleteTask(toolCall.arguments)
 
+    case "review_conversation_candidate":
+      return await executeReviewConversationCandidate(toolCall.arguments)
+
     // Onboarding tools
     case "request_permission":
       let result = await executeRequestPermission(toolCall.arguments)
@@ -327,6 +330,77 @@ class ChatToolExecutor {
     }
 
     return "OK: \(changes) row(s) affected"
+  }
+
+  /// Mark an ambient-derived candidate as reviewed so heartbeat does not repeat it.
+  private static func executeReviewConversationCandidate(_ args: [String: Any]) async -> String {
+    let rawId = args["candidate_id"]
+    let candidateId: Int64?
+    if let id = rawId as? Int64 {
+      candidateId = id
+    } else if let id = rawId as? Int {
+      candidateId = Int64(id)
+    } else if let text = rawId as? String {
+      candidateId = Int64(text.trimmingCharacters(in: .whitespacesAndNewlines))
+    } else {
+      candidateId = nil
+    }
+
+    guard let candidateId else {
+      return "Error: candidate_id is required"
+    }
+
+    guard let statusText = args["status"] as? String,
+          let status = ConversationCandidateStatus(rawValue: statusText) else {
+      return "Error: status must be promoted, rejected, or dismissed"
+    }
+
+    guard status == .promoted || status == .rejected || status == .dismissed else {
+      return "Error: status must be promoted, rejected, or dismissed"
+    }
+
+    let promotedToText = (args["promoted_to"] as? String)?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    let promotedTo = promotedToText?.isEmpty == false ? promotedToText : nil
+
+    guard let dbQueue = await RewindDatabase.shared.getDatabaseQueue() else {
+      return "Error: database not available"
+    }
+
+    do {
+      let changes = try await dbQueue.write { db -> Int in
+        let now = Date()
+        try db.execute(
+          sql: """
+            UPDATE conversation_candidates
+            SET status = ?,
+                promotedTo = ?,
+                promotedAt = CASE WHEN ? = 'promoted' THEN ? ELSE promotedAt END,
+                updatedAt = ?
+            WHERE id = ?
+              AND status = 'pending'
+            """,
+          arguments: [
+            status.rawValue,
+            promotedTo,
+            status.rawValue,
+            now,
+            now,
+            candidateId,
+          ]
+        )
+        return db.changesCount
+      }
+
+      guard changes > 0 else {
+        return "No pending candidate found for id \(candidateId)"
+      }
+      log("Tool review_conversation_candidate marked candidate \(candidateId) as \(status.rawValue)")
+      return "OK: candidate \(candidateId) marked \(status.rawValue)"
+    } catch {
+      logError("Tool review_conversation_candidate failed", error: error)
+      return "Error: \(error.localizedDescription)"
+    }
   }
 
   // MARK: - Daily Recap

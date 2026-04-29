@@ -6,6 +6,33 @@ actor ConversationCandidateProcessor {
 
     private init() {}
 
+    #if DEBUG
+    func candidatePreviewForTesting(texts: [String]) -> (candidateCount: Int, title: String, overview: String) {
+        let session = TranscriptionSessionRecord(
+            id: 1,
+            source: "desktop",
+            status: .completed,
+            backendId: "local_session_1",
+            backendSynced: true,
+            title: "Local Conversation",
+            conversationStatus: .completed
+        )
+        let segments = texts.enumerated().map { index, text in
+            TranscriptionSegmentRecord(
+                id: Int64(index + 1),
+                sessionId: 1,
+                speaker: 0,
+                text: text,
+                startTime: Double(index),
+                endTime: Double(index + 1),
+                segmentOrder: index
+            )
+        }
+        let result = buildResult(session: session, segments: segments)
+        return (result.candidates.count, result.title, result.overview)
+    }
+    #endif
+
     func processRecentCompletedSessions(limit: Int = 25) async {
         guard LocalMode.isEnabled else { return }
 
@@ -24,6 +51,7 @@ actor ConversationCandidateProcessor {
                           AND s.deleted = 0
                           AND s.discarded = 0
                           AND s.backendId LIKE 'local_session_%'
+                          AND s.localCandidateProcessedAt IS NULL
                           AND s.startedAt >= datetime('now', '-3 days')
                           AND c.id IS NULL
                         ORDER BY s.startedAt DESC
@@ -58,10 +86,21 @@ actor ConversationCandidateProcessor {
 
             let existing = try Int.fetchOne(
                 database,
-                sql: "SELECT COUNT(*) FROM conversation_candidates WHERE sessionId = ?",
+                sql: """
+                    SELECT COUNT(*)
+                    FROM conversation_candidates
+                    WHERE sessionId = ?
+                    """,
                 arguments: [sessionId]
             ) ?? 0
             guard existing == 0 else { return nil }
+
+            let processedAt = try Date.fetchOne(
+                database,
+                sql: "SELECT localCandidateProcessedAt FROM transcription_sessions WHERE id = ?",
+                arguments: [sessionId]
+            )
+            guard processedAt == nil else { return nil }
 
             let segments = try TranscriptionSegmentRecord
                 .filter(Column("sessionId") == sessionId)
@@ -78,6 +117,7 @@ actor ConversationCandidateProcessor {
 
         let result = buildResult(session: payload.session, segments: payload.segments)
         guard !result.candidates.isEmpty else {
+            try await markProcessed(sessionId: sessionId, db: db)
             log("ConversationCandidateProcessor: no useful candidates for session \(sessionId)")
             return
         }
@@ -103,6 +143,7 @@ actor ConversationCandidateProcessor {
             for candidate in result.candidates {
                 try Self.insertCandidate(candidate, into: database)
             }
+            try Self.markProcessed(sessionId: sessionId, in: database)
         }
 
         log(
@@ -117,7 +158,16 @@ actor ConversationCandidateProcessor {
         let conversationId = session.backendId ?? "local_session_\(session.id ?? 0)"
         let sentences = makeSentences(from: segments)
         let salient = sentences.filter { isSalient($0.text) }
-        let useful = salient.isEmpty ? sentences : salient
+        guard !salient.isEmpty else {
+            return ProcessingResult(
+                title: session.title ?? "Local Conversation",
+                overview: session.overview ?? "",
+                emoji: session.emoji ?? "",
+                category: session.category ?? "other",
+                candidates: []
+            )
+        }
+        let useful = salient
         let usefulWordCount = useful.reduce(0) { $0 + $1.text.split(separator: " ").count }
         guard useful.count >= 4, usefulWordCount >= 60 else {
             return ProcessingResult(
@@ -451,6 +501,25 @@ actor ConversationCandidateProcessor {
                 candidate.createdAt,
                 candidate.updatedAt,
             ]
+        )
+    }
+
+    private func markProcessed(sessionId: Int64, db: DatabasePool) async throws {
+        try await db.write { database in
+            try Self.markProcessed(sessionId: sessionId, in: database)
+        }
+    }
+
+    private static func markProcessed(sessionId: Int64, in db: Database) throws {
+        let now = Date()
+        try db.execute(
+            sql: """
+                UPDATE transcription_sessions
+                SET localCandidateProcessedAt = ?, updatedAt = ?
+                WHERE id = ?
+                  AND localCandidateProcessedAt IS NULL
+                """,
+            arguments: [now, now, sessionId]
         )
     }
 

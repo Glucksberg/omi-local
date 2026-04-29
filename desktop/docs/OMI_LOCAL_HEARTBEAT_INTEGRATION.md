@@ -54,6 +54,9 @@ local ambient sessions. This first pass is intentionally conservative and cheap:
 - local heuristic extraction only after a session completes
 - candidates are low-confidence evidence, not canonical memory
 - heartbeat and chat should inspect source transcript segments before promotion
+- reviewed candidates are closed with `review_conversation_candidate`
+- sessions are marked processed even when no candidates are created, so low-signal
+  sessions are not rescanned on every launch
 - durable memory writes still happen only through TomMemory/heartbeat review
 
 ## Target Architecture

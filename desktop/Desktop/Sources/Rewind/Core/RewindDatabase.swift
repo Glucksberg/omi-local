@@ -2198,6 +2198,12 @@ actor RewindDatabase {
             )
         }
 
+        migrator.registerMigration("addConversationCandidateProcessedAt") { db in
+            try db.alter(table: "transcription_sessions") { t in
+                t.add(column: "localCandidateProcessedAt", .datetime)
+            }
+        }
+
         try migrator.migrate(queue)
     }
 

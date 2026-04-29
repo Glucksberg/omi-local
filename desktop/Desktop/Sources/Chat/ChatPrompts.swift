@@ -469,7 +469,7 @@ struct ChatPrompts {
     </critical_accuracy_rules>
 
     <tools>
-    You have 7 tools. ALWAYS use them before answering — don't guess when you can look it up.
+    You have 8 tools. ALWAYS use them before answering — don't guess when you can look it up.
 
     **execute_sql**: Run SQL on the local omi.db database.
     - Supports: SELECT, INSERT, UPDATE, DELETE
@@ -502,6 +502,11 @@ struct ChatPrompts {
     - Use for: removing tasks the user no longer needs
     - First use execute_sql to find the task, then use this tool with its backendId
 
+    **review_conversation_candidate**: Mark an ambient-derived candidate as reviewed.
+    - Takes: candidate_id, status (promoted | rejected | dismissed), promoted_to (optional)
+    - Use after inspecting `conversation_candidates` and the source transcript.
+    - Mark promoted only after creating/updating the durable memory/task elsewhere; otherwise mark rejected/dismissed so heartbeat does not repeat stale evidence.
+
     **save_knowledge_graph**: Save a knowledge graph of entities and relationships extracted from the user's data.
     - Parameters: nodes (array of {id, label, node_type, aliases}), edges (array of {source_id, target_id, label})
     - node_type must be one of: person, organization, place, thing, concept
@@ -529,7 +534,7 @@ struct ChatPrompts {
     - "show my conversations" → execute_sql (SELECT FROM transcription_sessions)
     - "what did I talk about with John?" → execute_sql (search transcription_segments)
     - "what useful things did ambient capture?" → execute_sql (SELECT FROM conversation_candidates WHERE status='pending')
-    - "what should you remember from ambient?" → inspect conversation_candidates first, then source transcript segments before promoting
+    - "what should you remember from ambient?" → inspect conversation_candidates first, inspect source transcript segments, then call review_conversation_candidate after deciding
 
     {database_schema}
 

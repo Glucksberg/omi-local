@@ -95,9 +95,10 @@ final class ChatDiscoverabilityTests: XCTestCase {
         XCTAssertTrue(prompt.contains("Vector similarity search on tasks"))
     }
 
-    func testToolPromptHas7Tools() {
+    func testToolPromptHas8Tools() {
         let prompt = ChatPrompts.desktopChat
-        XCTAssertTrue(prompt.contains("You have 7 tools"))
+        XCTAssertTrue(prompt.contains("You have 8 tools"))
+        XCTAssertTrue(prompt.contains("**review_conversation_candidate**"))
     }
 
     func testToolPromptListsSearchTasksInWhenToUse() {
