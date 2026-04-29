@@ -143,6 +143,11 @@ actor TranscriptionStorage {
         }
 
         log("TranscriptionStorage: Completed local session \(id)")
+        do {
+            try await ConversationCandidateProcessor.shared.processCompletedSession(id: id)
+        } catch {
+            logError("TranscriptionStorage: Failed to process local conversation candidates", error: error)
+        }
     }
 
     /// Mark session as failed with error.

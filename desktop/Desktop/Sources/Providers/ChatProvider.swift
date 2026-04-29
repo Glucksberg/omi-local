@@ -2423,6 +2423,8 @@ Memory file writes are disabled for this heartbeat. Bash is blocked. Read contex
 You are running a scheduled heartbeat for Markus.
 Read `\(heartbeatFilePath)` if it exists and follow it strictly.
 Use lightweight context. Do not repeat old alerts. Do not invent tasks.
+Check recent `conversation_candidates` rows with `status='pending'` before scanning raw transcript segments.
+Treat candidates as unreviewed evidence: promote only durable, high-confidence items, and inspect source transcript rows when uncertain.
 The app will append an audit summary to `\(runLogFilePath)` after this turn; do not manually write the run log.
 \(memoryWriteInstructions)
 If nothing needs Markus's attention, reply exactly `HEARTBEAT_OK`.
@@ -2432,7 +2434,7 @@ Never perform destructive actions, sends, purchases, credential changes, or prod
 """
 
         let prompt = """
-Read `\(heartbeatFilePath)` if it exists. Check only safe, useful background context. Consolidate useful memory only if it belongs inside TomMemory and the heartbeat allows memory writes. If nothing needs attention, reply HEARTBEAT_OK. Otherwise return one concise alert for Markus.
+Read `\(heartbeatFilePath)` if it exists. Check only safe, useful background context, especially recent pending rows in `conversation_candidates`. Consolidate useful memory only if it belongs inside TomMemory and the heartbeat allows memory writes. If nothing needs attention, reply HEARTBEAT_OK. Otherwise return one concise alert for Markus.
 """
 
         let activityRecorder = HeartbeatToolActivityRecorder()

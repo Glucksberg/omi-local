@@ -2156,6 +2156,48 @@ actor RewindDatabase {
             }
         }
 
+        migrator.registerMigration("createConversationCandidates") { db in
+            try db.create(table: "conversation_candidates") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("sessionId", .integer).notNull()
+                    .references("transcription_sessions", onDelete: .cascade)
+                t.column("conversationId", .text).notNull()
+                t.column("candidateType", .text).notNull()
+                t.column("status", .text).notNull().defaults(to: "pending")
+                t.column("content", .text).notNull()
+                t.column("reasoning", .text)
+                t.column("confidence", .double).notNull().defaults(to: 0.0)
+                t.column("sourceSegmentIdsJson", .text)
+                t.column("contentHash", .text).notNull()
+                t.column("promotedTo", .text)
+                t.column("promotedAt", .datetime)
+                t.column("createdAt", .datetime).notNull()
+                t.column("updatedAt", .datetime).notNull()
+            }
+
+            try db.create(
+                index: "idx_conversation_candidates_session",
+                on: "conversation_candidates",
+                columns: ["sessionId"]
+            )
+            try db.create(
+                index: "idx_conversation_candidates_status_type",
+                on: "conversation_candidates",
+                columns: ["status", "candidateType"]
+            )
+            try db.create(
+                index: "idx_conversation_candidates_created",
+                on: "conversation_candidates",
+                columns: ["createdAt"]
+            )
+            try db.create(
+                index: "idx_conversation_candidates_hash",
+                on: "conversation_candidates",
+                columns: ["contentHash"],
+                unique: true
+            )
+        }
+
         try migrator.migrate(queue)
     }
 

@@ -45,6 +45,17 @@ HeartbeatScheduler
 These paths are adjacent, not fully integrated. The bridge should be a local
 candidate layer.
 
+## Implemented Bridge
+
+Omi Local now creates a local `conversation_candidates` queue after completed
+local ambient sessions. This first pass is intentionally conservative and cheap:
+
+- no extra continuous LLM processing while ambient transcription is running
+- local heuristic extraction only after a session completes
+- candidates are low-confidence evidence, not canonical memory
+- heartbeat and chat should inspect source transcript segments before promotion
+- durable memory writes still happen only through TomMemory/heartbeat review
+
 ## Target Architecture
 
 ```text

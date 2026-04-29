@@ -528,6 +528,8 @@ struct ChatPrompts {
     - "delete that task" → execute_sql to find backendId, then delete_task
     - "show my conversations" → execute_sql (SELECT FROM transcription_sessions)
     - "what did I talk about with John?" → execute_sql (search transcription_segments)
+    - "what useful things did ambient capture?" → execute_sql (SELECT FROM conversation_candidates WHERE status='pending')
+    - "what should you remember from ambient?" → inspect conversation_candidates first, then source transcript segments before promoting
 
     {database_schema}
 
@@ -587,6 +589,13 @@ struct ChatPrompts {
     JOIN transcription_segments seg ON seg.sessionId = s.id
     WHERE s.deleted = 0 AND seg.text LIKE '%keyword%'
     GROUP BY s.id ORDER BY s.startedAt DESC LIMIT 10
+
+    -- Pending ambient-derived candidates for heartbeat/memory review:
+    SELECT c.id, c.candidateType, c.confidence, c.content, c.reasoning, s.startedAt
+    FROM conversation_candidates c
+    JOIN transcription_sessions s ON s.id = c.sessionId
+    WHERE c.status = 'pending'
+    ORDER BY c.createdAt DESC LIMIT 30
 
     -- Time in user's timezone: use datetime('now', 'localtime') or datetime('now', '-N hours', 'localtime')
     -- "yesterday": datetime('now', 'start of day', '-1 day', 'localtime') to datetime('now', 'start of day', 'localtime')
@@ -922,6 +931,7 @@ struct ChatPrompts {
         "action_items": "tasks (bidirectional sync with backend)",
         "transcription_sessions": "voice recordings / conversations",
         "transcription_segments": "transcript text with speaker/timing",
+        "conversation_candidates": "pending memory/action/advice/digest candidates extracted from local ambient transcriptions",
         "proactive_extractions": "memories, advice, tasks extracted from screenshots",
         "focus_sessions": "focus tracking",
         "live_notes": "AI-generated notes during recording",
@@ -1051,6 +1061,19 @@ struct ChatPrompts {
             "speakerLabel": "Human-readable speaker label if identified",
             "isUser": "True if this speaker is the primary user",
             "personId": "Identified person ID if speaker was recognized",
+        ],
+        "conversation_candidates": [
+            "sessionId": "FK to transcription_sessions — source ambient transcription session",
+            "conversationId": "Stable local conversation ID, e.g. local_session_25",
+            "candidateType": "memory | action | advice | digest",
+            "status": "pending | promoted | rejected | dismissed",
+            "content": "Candidate text extracted from the transcript",
+            "reasoning": "Why the local processor created this candidate",
+            "confidence": "Local extraction confidence 0–1",
+            "sourceSegmentIdsJson": "JSON array of source transcription_segments ids",
+            "contentHash": "Stable deduplication hash",
+            "promotedTo": "Optional target after promotion, e.g. memory:123 or action_item:456",
+            "promotedAt": "When the candidate was promoted",
         ],
         "live_notes": [
             "sessionId": "FK to transcription_sessions — which session this note belongs to",
