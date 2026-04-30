@@ -63,6 +63,16 @@ struct ConversationDetailView: View {
         return status == .inProgress || status == .processing || status == .merging
     }
 
+    static func shouldShowInlineTranscript(
+        localMode: Bool,
+        isLoading: Bool,
+        hasOverview: Bool,
+        hasSegments: Bool,
+        isTranscriptDrawerVisible: Bool
+    ) -> Bool {
+        localMode && !isLoading && !hasOverview && hasSegments && !isTranscriptDrawerVisible
+    }
+
     /// The conversation to display - use loaded version if available, otherwise use prop
     private var displayConversation: ServerConversation {
         loadedConversation ?? conversation
@@ -547,7 +557,13 @@ struct ConversationDetailView: View {
             overviewSection
         } else if LocalMode.isEnabled && isLoadingConversation {
             transcriptLoadingSection
-        } else if LocalMode.isEnabled && !displayConversation.transcriptSegments.isEmpty {
+        } else if Self.shouldShowInlineTranscript(
+            localMode: LocalMode.isEnabled,
+            isLoading: isLoadingConversation,
+            hasOverview: !displayConversation.overview.isEmpty,
+            hasSegments: !displayConversation.transcriptSegments.isEmpty,
+            isTranscriptDrawerVisible: showTranscriptDrawer
+        ) {
             inlineTranscriptSection
         }
 
