@@ -58,6 +58,11 @@ struct ConversationDetailView: View {
         return (targets, backendIds, fallbackOrders)
     }
 
+    static func shouldPollLocalTranscript(conversationId: String, status: ConversationStatus) -> Bool {
+        guard conversationId.hasPrefix("local_session_") else { return false }
+        return status == .inProgress || status == .processing || status == .merging
+    }
+
     /// The conversation to display - use loaded version if available, otherwise use prop
     private var displayConversation: ServerConversation {
         loadedConversation ?? conversation
@@ -181,40 +186,8 @@ struct ConversationDetailView: View {
             await onFetchPeople?()
             AnalyticsManager.shared.conversationDetailOpened(conversationId: conversation.id)
 
-            // Load segments from local database if not already present
-            // Segments are stored locally but not loaded with the list view for performance
-            if shouldLoadConversation {
-                if !isLoadingConversation {
-                    isLoadingConversation = true
-                }
-                do {
-                    // First try local database (faster, works offline)
-                    if let session = try await TranscriptionStorage.shared.getSessionByBackendId(conversation.id) {
-                        let segmentRecords = try await TranscriptionStorage.shared.getSegments(sessionId: session.id!)
-                        if !segmentRecords.isEmpty {
-                            // Convert local records to TranscriptSegments and update conversation
-                            let segments = segmentRecords.map { $0.toTranscriptSegment() }
-                            var updatedConversation = conversation
-                            updatedConversation.transcriptSegments = segments
-                            loadedConversation = updatedConversation
-                            log("ConversationDetail: Loaded \(segments.count) segments from local database")
-                        } else {
-                            // No local segments, fetch from API
-                            let fullConversation = try await APIClient.shared.getConversation(id: conversation.id)
-                            loadedConversation = fullConversation
-                            log("ConversationDetail: Loaded \(fullConversation.transcriptSegments.count) segments from API")
-                        }
-                    } else {
-                        // No local session found, fetch from API
-                        let fullConversation = try await APIClient.shared.getConversation(id: conversation.id)
-                        loadedConversation = fullConversation
-                        log("ConversationDetail: Loaded \(fullConversation.transcriptSegments.count) segments from API (no local session)")
-                    }
-                } catch {
-                    logError("ConversationDetail: Failed to load conversation segments", error: error)
-                }
-                isLoadingConversation = false
-            }
+            await loadConversationSegmentsIfNeeded(shouldLoadConversation)
+            await pollLocalConversationUpdates()
         }
         .onReceive(
             NotificationCenter.default.publisher(for: .desktopAutomationShowConversationTranscriptRequested)
@@ -714,6 +687,91 @@ struct ConversationDetailView: View {
                 }
             )
             .padding(.horizontal, 16)
+        }
+    }
+
+    @MainActor
+    private func loadConversationSegmentsIfNeeded(_ shouldLoadConversation: Bool) async {
+        guard shouldLoadConversation else { return }
+
+        if !isLoadingConversation {
+            isLoadingConversation = true
+        }
+        defer { isLoadingConversation = false }
+
+        if LocalMode.isEnabled {
+            _ = await refreshLocalConversationFromStorage()
+            return
+        }
+
+        do {
+            // First try local database (faster, works offline)
+            if let session = try await TranscriptionStorage.shared.getSessionByBackendId(conversation.id),
+               let sessionId = session.id
+            {
+                let segmentRecords = try await TranscriptionStorage.shared.getSegments(sessionId: sessionId)
+                if !segmentRecords.isEmpty {
+                    // Convert local records to TranscriptSegments and update conversation
+                    let segments = segmentRecords.map { $0.toTranscriptSegment() }
+                    var updatedConversation = conversation
+                    updatedConversation.transcriptSegments = segments
+                    loadedConversation = updatedConversation
+                    log("ConversationDetail: Loaded \(segments.count) segments from local database")
+                    return
+                }
+            }
+
+            // No local segments, fetch from API
+            let fullConversation = try await APIClient.shared.getConversation(id: conversation.id)
+            loadedConversation = fullConversation
+            log("ConversationDetail: Loaded \(fullConversation.transcriptSegments.count) segments from API")
+        } catch {
+            logError("ConversationDetail: Failed to load conversation segments", error: error)
+        }
+    }
+
+    @MainActor
+    @discardableResult
+    private func refreshLocalConversationFromStorage() async -> Bool {
+        do {
+            guard let localConversation = try await TranscriptionStorage.shared.getLocalConversation(
+                backendId: conversation.id
+            ) else {
+                return false
+            }
+
+            let previousSegmentCount = displayConversation.transcriptSegments.count
+            loadedConversation = localConversation
+
+            if localConversation.transcriptSegments.count != previousSegmentCount {
+                log(
+                    "ConversationDetail: Refreshed local transcript \(previousSegmentCount) -> \(localConversation.transcriptSegments.count) segments"
+                )
+            }
+            return true
+        } catch {
+            logError("ConversationDetail: Failed to refresh local conversation", error: error)
+            return false
+        }
+    }
+
+    @MainActor
+    private func pollLocalConversationUpdates() async {
+        guard LocalMode.isEnabled else { return }
+
+        while !Task.isCancelled {
+            let activeConversation = displayConversation
+            guard Self.shouldPollLocalTranscript(
+                conversationId: activeConversation.id,
+                status: activeConversation.status
+            ) else {
+                return
+            }
+
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            if Task.isCancelled { return }
+
+            _ = await refreshLocalConversationFromStorage()
         }
     }
 
