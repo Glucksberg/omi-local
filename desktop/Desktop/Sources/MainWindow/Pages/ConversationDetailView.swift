@@ -659,11 +659,23 @@ struct ConversationDetailView: View {
             } else {
                 // LazyVStack is a DIRECT child of ScrollView so it gets bounded proposed height
                 // and only materializes visible children.
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
-                        transcriptBubblesContent
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 12) {
+                            transcriptBubblesContent
+
+                            Color.clear
+                                .frame(height: 1)
+                                .id("transcript-bottom")
+                        }
+                        .padding(16)
                     }
-                    .padding(16)
+                    .onAppear {
+                        scrollLiveTranscriptToBottom(proxy, animated: false)
+                    }
+                    .onChange(of: displayConversation.transcriptSegments.count) { _, _ in
+                        scrollLiveTranscriptToBottom(proxy, animated: true)
+                    }
                 }
             }
         }
@@ -687,6 +699,25 @@ struct ConversationDetailView: View {
                 }
             )
             .padding(.horizontal, 16)
+        }
+    }
+
+    private func scrollLiveTranscriptToBottom(_ proxy: ScrollViewProxy, animated: Bool) {
+        guard Self.shouldPollLocalTranscript(
+            conversationId: displayConversation.id,
+            status: displayConversation.status
+        ) else {
+            return
+        }
+
+        DispatchQueue.main.async {
+            if animated {
+                withAnimation(.easeOut(duration: 0.2)) {
+                    proxy.scrollTo("transcript-bottom", anchor: .bottom)
+                }
+            } else {
+                proxy.scrollTo("transcript-bottom", anchor: .bottom)
+            }
         }
     }
 
