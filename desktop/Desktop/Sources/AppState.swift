@@ -13,8 +13,13 @@ struct SegmentTranslation: Identifiable {
 
 /// Speaker segment for diarized transcription
 struct SpeakerSegment: Identifiable {
-  /// Stable identity — uses backend segment ID when available, otherwise speaker + start time
-  var id: String { segmentId ?? "\(speaker)-\(start)" }
+  /// Stable identity — uses backend segment ID when available, otherwise a local UUID.
+  ///
+  /// Local STT chunks can share the same speaker/start timestamp because each audio window
+  /// is transcribed independently. Using speaker+start as a fallback gives SwiftUI duplicate
+  /// `ForEach` IDs and causes repeated visual bubbles for a single segment.
+  var id: String { segmentId ?? localId }
+  var localId: String = UUID().uuidString
   var segmentId: String?   // Backend-assigned UUID
   var speaker: Int
   var text: String
