@@ -63,16 +63,6 @@ struct ConversationDetailView: View {
         return status == .inProgress || status == .processing || status == .merging
     }
 
-    static func shouldShowInlineTranscript(
-        localMode: Bool,
-        isLoading: Bool,
-        hasOverview: Bool,
-        hasSegments: Bool,
-        isTranscriptDrawerVisible: Bool
-    ) -> Bool {
-        localMode && !isLoading && !hasOverview && hasSegments && !isTranscriptDrawerVisible
-    }
-
     /// The conversation to display - use loaded version if available, otherwise use prop
     private var displayConversation: ServerConversation {
         loadedConversation ?? conversation
@@ -556,15 +546,9 @@ struct ConversationDetailView: View {
         if !displayConversation.overview.isEmpty {
             overviewSection
         } else if LocalMode.isEnabled && isLoadingConversation {
-            transcriptLoadingSection
-        } else if Self.shouldShowInlineTranscript(
-            localMode: LocalMode.isEnabled,
-            isLoading: isLoadingConversation,
-            hasOverview: !displayConversation.overview.isEmpty,
-            hasSegments: !displayConversation.transcriptSegments.isEmpty,
-            isTranscriptDrawerVisible: showTranscriptDrawer
-        ) {
-            inlineTranscriptSection
+            detailsLoadingSection
+        } else if LocalMode.isEnabled {
+            summaryPendingSection
         }
 
         // Metadata chips
@@ -883,44 +867,33 @@ struct ConversationDetailView: View {
         }
     }
 
-    private var transcriptLoadingSection: some View {
+    private var detailsLoadingSection: some View {
         HStack(spacing: 10) {
             ProgressView()
                 .scaleEffect(0.8)
 
-            Text("Loading transcript...")
+            Text("Loading conversation...")
                 .scaledFont(size: 14)
                 .foregroundColor(OmiColors.textTertiary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var inlineTranscriptSection: some View {
+    private var summaryPendingSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 6) {
-                Image(systemName: "text.quote")
+                Image(systemName: "sparkles")
                     .scaledFont(size: 13)
-                    .foregroundColor(OmiColors.purplePrimary)
+                    .foregroundColor(OmiColors.textTertiary)
 
-                Text("Transcript")
+                Text("Summary")
                     .scaledFont(size: 14, weight: .semibold)
                     .foregroundColor(OmiColors.textSecondary)
-
-                Text("\(displayConversation.transcriptSegments.count)")
-                    .scaledFont(size: 11, weight: .medium)
-                    .foregroundColor(OmiColors.purplePrimary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 2)
-                    .background(
-                        Capsule()
-                            .fill(OmiColors.purplePrimary.opacity(0.15))
-                    )
             }
 
-            Text(displayConversation.transcript)
+            Text("No summary has been generated for this conversation yet.")
                 .scaledFont(size: 13)
-                .foregroundColor(OmiColors.textPrimary)
-                .textSelection(.enabled)
+                .foregroundColor(OmiColors.textTertiary)
                 .lineSpacing(4)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }

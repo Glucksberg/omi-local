@@ -29,24 +29,4 @@ final class ConversationDetailViewTests: XCTestCase {
         )
     }
 
-    func testInlineTranscriptIsHiddenWhenDrawerIsVisible() {
-        XCTAssertFalse(
-            ConversationDetailView.shouldShowInlineTranscript(
-                localMode: true,
-                isLoading: false,
-                hasOverview: false,
-                hasSegments: true,
-                isTranscriptDrawerVisible: true
-            )
-        )
-        XCTAssertTrue(
-            ConversationDetailView.shouldShowInlineTranscript(
-                localMode: true,
-                isLoading: false,
-                hasOverview: false,
-                hasSegments: true,
-                isTranscriptDrawerVisible: false
-            )
-        )
-    }
 }
