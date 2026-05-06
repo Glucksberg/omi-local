@@ -101,6 +101,7 @@
         const state = {{ state | tojson }};
         const error = {{ (error if error is defined else '') | tojson }};
         const baseRedirect = {{ redirect_uri | default('omi://auth/callback') | tojson }};
+        const allowedCustomSchemes = {{ allowed_custom_schemes | default(['omi', 'omi-computer', 'omi-computer-dev', 'com.omi.app']) | tojson }};
 
         const errorElement = document.getElementById('error');
         const messageElement = document.getElementById('message');
@@ -137,8 +138,10 @@
                 }
             }
 
-            // Native-app custom scheme (omi://, omi-computer://, etc.)
-            return true;
+            // Native-app custom scheme. Keep this exact list in sync with
+            // backend/routers/auth.py; arbitrary custom schemes can be
+            // registered by attacker-controlled apps.
+            return allowedCustomSchemes.indexOf(scheme) !== -1;
         }
 
         if (error) {

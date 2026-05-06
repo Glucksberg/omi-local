@@ -29,6 +29,8 @@ These rules apply to Codex when working in this repository.
 
 - No in-function imports. All imports must be at the module top level.
 - Follow the module hierarchy when importing. Higher-level modules import from lower-level modules, never the reverse.
+- OAuth redirect schemes are an exact allowlist. For local/dev named desktop bundles, add comma-separated schemes
+  via `OMI_AUTH_ALLOWED_CUSTOM_REDIRECT_SCHEMES`; never use wildcard scheme acceptance.
 
 Module hierarchy (lowest to highest):
 1. `database/`

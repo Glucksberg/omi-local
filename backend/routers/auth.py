@@ -34,6 +34,20 @@ templates = Jinja2Templates(directory=str(templates_path))
 _LOOPBACK_HOSTNAMES = {"localhost", "127.0.0.1", "::1"}
 _DEFAULT_MOBILE_REDIRECT = "omi://auth/callback"
 
+# Custom app schemes that may receive an OAuth code by default.
+#
+# Do not broaden this with wildcards like ``omi-*``. On native platforms, any
+# app can register its own custom scheme; accepting arbitrary schemes lets an
+# attacker choose ``evilapp://`` (or ``omi-evil://``), receive the code, and
+# redeem it at /token.
+_ALLOWED_CUSTOM_REDIRECT_SCHEMES = {
+    "omi",
+    "omi-computer",
+    "omi-computer-dev",
+    "com.omi.app",
+}
+_EXTRA_CUSTOM_REDIRECT_SCHEMES_ENV = "OMI_AUTH_ALLOWED_CUSTOM_REDIRECT_SCHEMES"
+
 # Schemes that must NOT receive an OAuth code:
 #   - ``https``: would leak the code to an arbitrary remote host. (Loopback OAuth
 #     is HTTP, not HTTPS, per RFC 8252.)
@@ -58,12 +72,11 @@ def _validate_redirect_uri(redirect_uri: str) -> None:
 
     Allow:
 
-    * **Custom app schemes** (``omi://``, ``omi-computer://``,
-      ``omi-computer-dev://``, ``omi-fix-rewind://``, ``com.omi.app://``,
-      etc.). The Omi mobile app, the macOS desktop app, and per-bundle
-      developer test builds register their own URL schemes with the OS
-      via ``CFBundleURLSchemes`` / Android intent filters; this is the
-      standard native-app OAuth callback mechanism per RFC 8252.
+    * **Allowlisted custom app schemes** (``omi://``, ``omi-computer://``,
+      ``omi-computer-dev://``, ``com.omi.app://``, plus explicitly configured
+      dev schemes). The Omi mobile app and macOS desktop app register their URL
+      schemes with the OS via ``CFBundleURLSchemes`` / Android intent filters;
+      this is the standard native-app OAuth callback mechanism per RFC 8252.
 
     * **HTTP loopback** (``http://localhost[:PORT]/...``,
       ``http://127.0.0.1[:PORT]/...``, ``http://[::1][:PORT]/...``) for the
@@ -75,6 +88,7 @@ def _validate_redirect_uri(redirect_uri: str) -> None:
       the auth code off-device.
     * **http://** to anything other than loopback.
     * Browser-executable schemes (``javascript:``, ``data:``, etc.).
+    * Unknown custom schemes, because arbitrary native apps can register them.
     * Empty / unparseable input.
 
     Security note: the auth ``code`` is a one-time secret. If we accepted
@@ -116,6 +130,12 @@ def _validate_redirect_uri(redirect_uri: str) -> None:
             detail=f"redirect_uri scheme '{scheme}' is malformed",
         )
 
+    if scheme not in _allowed_custom_redirect_schemes():
+        raise HTTPException(
+            status_code=400,
+            detail=f"redirect_uri scheme '{scheme}' is not permitted",
+        )
+
     return
 
 
@@ -136,6 +156,26 @@ def _is_valid_scheme(scheme: str) -> bool:
     if lowered[0] not in _ASCII_LETTERS:
         return False
     return all(c in _ASCII_ALNUM or c in "+-." for c in lowered)
+
+
+def _allowed_custom_redirect_schemes() -> set[str]:
+    allowed = set(_ALLOWED_CUSTOM_REDIRECT_SCHEMES)
+    extra = os.getenv(_EXTRA_CUSTOM_REDIRECT_SCHEMES_ENV, "")
+    for raw in extra.split(","):
+        scheme = raw.strip().lower()
+        if scheme and _is_valid_scheme(scheme) and scheme not in _FORBIDDEN_REDIRECT_SCHEMES:
+            allowed.add(scheme)
+    return allowed
+
+
+def _auth_callback_template_context(request: Request, auth_code: str, state: str, redirect_uri: str) -> dict:
+    return {
+        "request": request,
+        "code": auth_code,
+        "state": state,
+        "redirect_uri": redirect_uri,
+        "allowed_custom_schemes": sorted(_allowed_custom_redirect_schemes()),
+    }
 
 
 @router.get("/authorize")
@@ -206,12 +246,7 @@ async def auth_callback_google(
     # ``/authorize`` time and cannot be overridden by the caller here.
     return templates.TemplateResponse(
         "auth_callback.html",
-        {
-            "request": request,
-            "code": auth_code,
-            "state": session_data['state'] or '',
-            "redirect_uri": app_redirect_uri,
-        },
+        _auth_callback_template_context(request, auth_code, session_data['state'] or '', app_redirect_uri),
     )
 
 
@@ -248,12 +283,7 @@ async def auth_callback_apple_post(
     # ``/authorize`` time and cannot be overridden by the caller here.
     return templates.TemplateResponse(
         "auth_callback.html",
-        {
-            "request": request,
-            "code": auth_code,
-            "state": session_data['state'] or '',
-            "redirect_uri": app_redirect_uri,
-        },
+        _auth_callback_template_context(request, auth_code, session_data['state'] or '', app_redirect_uri),
     )
 
 

@@ -1,7 +1,7 @@
 """Tests for ``backend.routers.auth._validate_redirect_uri``.
 
 The validator must accept every ``redirect_uri`` shape the Omi clients
-already use today (mobile, desktop, named-bundle desktop builds, CLI) and
+already use today (mobile, desktop, CLI) and
 reject anything that could leak the OAuth code off-device. These tests
 serve as a regression guard — if the allowlist tightens in a way that
 rejects an existing client's URI, CI will fail here before any deploy.
@@ -11,7 +11,6 @@ Mapping to real-world clients:
 * ``omi://auth/callback``                — Flutter app (``app/lib/services/auth_service.dart``)
 * ``omi-computer://auth/callback``       — desktop prod build
 * ``omi-computer-dev://auth/callback``   — desktop dev build (``Desktop/Info.plist``)
-* ``omi-fix-rewind://auth/callback``     — example named test bundle
 * ``com.omi.app://auth/callback``        — reverse-DNS form (RFC 8252-recommended)
 * ``http://127.0.0.1:PORT/callback``     — omi-cli loopback server
 * ``http://localhost:PORT/callback``     — omi-cli loopback (alt)
@@ -20,12 +19,16 @@ Mapping to real-world clients:
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
+import pathlib
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+from jinja2 import Environment, FileSystemLoader
 
 # Backend modules expect ENCRYPTION_SECRET to be set at import time.
 os.environ.setdefault(
@@ -39,7 +42,7 @@ os.environ.setdefault("BASE_API_URL", "http://localhost:8080")
 # Pre-mock heavy deps before importing the module under test (Python 3.9 compat —
 # database.redis_db uses dict | None syntax that requires 3.10+).
 _mock = MagicMock()
-for mod in ['firebase_admin.auth', 'database.redis_db', 'utils.http_client', 'utils.log_sanitizer']:
+for mod in ['firebase_admin', 'firebase_admin.auth', 'database.redis_db', 'utils.http_client', 'utils.log_sanitizer']:
     sys.modules.setdefault(mod, _mock)
 
 # Allow importing ``backend.routers.auth`` without running the full backend
@@ -48,7 +51,12 @@ _BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 if _BACKEND_DIR not in sys.path:
     sys.path.insert(0, _BACKEND_DIR)
 
-from routers.auth import _validate_redirect_uri  # noqa: E402
+from routers.auth import (
+    _DEFAULT_MOBILE_REDIRECT,
+    _validate_redirect_uri,
+    auth_callback_google,
+    auth_token,
+)  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Acceptance — every shape an existing Omi client uses
@@ -64,8 +72,6 @@ from routers.auth import _validate_redirect_uri  # noqa: E402
         "omi-computer://auth/callback",
         # Desktop dev (Desktop/Info.plist)
         "omi-computer-dev://auth/callback",
-        # Named test bundle (CLAUDE.md "omi-{anything}" convention)
-        "omi-fix-rewind://auth/callback",
         # Reverse-DNS custom scheme (RFC 8252-recommended)
         "com.omi.app://auth/callback",
         # CLI loopback — IPv4 numeric
@@ -113,6 +119,12 @@ def test_validator_accepts_every_known_client_shape(uri: str) -> None:
         "blob:http://localhost/abc",
         "filesystem:http://localhost/abc",
         "about:blank",
+        # Unknown custom schemes — native apps can register arbitrary schemes,
+        # so these must not receive OAuth codes unless explicitly configured.
+        "evilapp://auth/callback",
+        "omi-evil://auth/callback",
+        "omi-fix-rewind://auth/callback",
+        "com.attacker.app://auth/callback",
         # Malformed scheme
         "://x",
         "1omi://auth/callback",  # scheme must start with a letter
@@ -146,15 +158,18 @@ def test_default_omi_redirect_unchanged() -> None:
     _validate_redirect_uri("omi://auth/callback")
 
 
+def test_extra_custom_redirect_scheme_requires_explicit_env_allowlist() -> None:
+    with pytest.raises(HTTPException):
+        _validate_redirect_uri("omi-fix-rewind://auth/callback")
+
+    with patch.dict(os.environ, {"OMI_AUTH_ALLOWED_CUSTOM_REDIRECT_SCHEMES": "omi-fix-rewind"}):
+        _validate_redirect_uri("omi-fix-rewind://auth/callback")
+
+
 # ---------------------------------------------------------------------------
 # Auth code binding — redirect_uri is stored in the auth code and enforced
 # at /v1/auth/token exchange time (#7020)
 # ---------------------------------------------------------------------------
-
-import json
-from unittest.mock import AsyncMock
-
-from routers.auth import auth_token, _DEFAULT_MOBILE_REDIRECT  # noqa: E402
 
 
 class TestAuthCodeBinding:
@@ -177,8 +192,6 @@ class TestAuthCodeBinding:
         )
 
         with patch('routers.auth.get_auth_code', return_value=code_data), patch('routers.auth.delete_auth_code'):
-            import asyncio
-
             request = MagicMock()
 
             with pytest.raises(HTTPException) as exc_info:
@@ -211,8 +224,6 @@ class TestAuthCodeBinding:
         )
 
         with patch('routers.auth.get_auth_code', return_value=code_data), patch('routers.auth.delete_auth_code'):
-            import asyncio
-
             request = MagicMock()
 
             result = asyncio.get_event_loop().run_until_complete(
@@ -239,8 +250,6 @@ class TestAuthCodeBinding:
         )
 
         with patch('routers.auth.get_auth_code', return_value=legacy_data), patch('routers.auth.delete_auth_code'):
-            import asyncio
-
             request = MagicMock()
 
             result = asyncio.get_event_loop().run_until_complete(
@@ -267,8 +276,6 @@ class TestAuthCodeBinding:
         )
         request = MagicMock()
         with patch('routers.auth.get_auth_code', return_value=code_data), patch('routers.auth.delete_auth_code'):
-            import asyncio
-
             with pytest.raises(HTTPException) as exc_info:
                 asyncio.get_event_loop().run_until_complete(
                     auth_token(
@@ -288,9 +295,6 @@ class TestCallbackTemplateRendering:
 
     def test_template_uses_dynamic_redirect_uri(self):
         """Verify auth_callback.html renders with the session's redirect_uri, not hardcoded."""
-        from jinja2 import Environment, FileSystemLoader
-        import pathlib
-
         templates_dir = pathlib.Path(__file__).parent.parent.parent / "templates"
         env = Environment(loader=FileSystemLoader(str(templates_dir)), autoescape=True)
         template = env.get_template("auth_callback.html")
@@ -306,9 +310,6 @@ class TestCallbackTemplateRendering:
 
     def test_template_json_escapes_redirect_uri(self):
         """Verify redirect_uri is JSON-escaped in the template (XSS prevention)."""
-        from jinja2 import Environment, FileSystemLoader
-        import pathlib
-
         templates_dir = pathlib.Path(__file__).parent.parent.parent / "templates"
         env = Environment(loader=FileSystemLoader(str(templates_dir)), autoescape=True)
         template = env.get_template("auth_callback.html")
@@ -323,9 +324,6 @@ class TestCallbackTemplateRendering:
 
     def test_template_defaults_when_redirect_uri_missing(self):
         """Verify template falls back to omi://auth/callback when redirect_uri not provided."""
-        from jinja2 import Environment, FileSystemLoader
-        import pathlib
-
         templates_dir = pathlib.Path(__file__).parent.parent.parent / "templates"
         env = Environment(loader=FileSystemLoader(str(templates_dir)), autoescape=True)
         template = env.get_template("auth_callback.html")
@@ -343,9 +341,6 @@ class TestCallbackEndpoints:
 
     def test_google_callback_binds_redirect_uri_to_auth_code(self):
         """Google callback wraps credentials with redirect_uri and stores with TTL 300."""
-        from routers.auth import auth_callback_google
-        import asyncio
-
         session_data = {
             'provider': 'google',
             'redirect_uri': 'omi-computer://auth/callback',
@@ -376,9 +371,6 @@ class TestCallbackEndpoints:
 
     def test_callback_defaults_redirect_uri_when_missing_from_session(self):
         """When session has no redirect_uri, callback falls back to default."""
-        from routers.auth import auth_callback_google
-        import asyncio
-
         session_data = {
             'provider': 'google',
             'state': 'test-state',
@@ -405,8 +397,6 @@ class TestTokenEdgeCases:
 
     def test_token_deletes_code_on_use(self):
         """Auth code is single-use — delete_auth_code must be called."""
-        import asyncio
-
         code_data = json.dumps(
             {'provider': 'google', 'id_token': 't', 'access_token': 'a', 'provider_id': 'google.com'}
         )
@@ -428,8 +418,6 @@ class TestTokenEdgeCases:
 
     def test_token_rejects_expired_code(self):
         """Expired/missing code returns 400."""
-        import asyncio
-
         request = MagicMock()
         with patch('routers.auth.get_auth_code', return_value=None):
             with pytest.raises(HTTPException) as exc_info:
@@ -447,8 +435,6 @@ class TestTokenEdgeCases:
 
     def test_token_handles_credentials_as_dict(self):
         """When credentials is already a dict (not JSON string), parsing succeeds."""
-        import asyncio
-
         code_data = json.dumps(
             {
                 'credentials': {
@@ -477,8 +463,6 @@ class TestTokenEdgeCases:
 
     def test_token_rejects_unsupported_grant_type(self):
         """Non-authorization_code grant type returns 400."""
-        import asyncio
-
         request = MagicMock()
         with pytest.raises(HTTPException) as exc_info:
             asyncio.get_event_loop().run_until_complete(

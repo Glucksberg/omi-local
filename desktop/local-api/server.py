@@ -9,6 +9,7 @@ SQLite persistence, local loopback only by default.
 from __future__ import annotations
 
 import json
+import ipaddress
 import os
 import re
 import signal
@@ -23,12 +24,40 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-
 APP_SUPPORT = Path.home() / "Library" / "Application Support" / "Omi Local"
 DEFAULT_DB_PATH = APP_SUPPORT / "local-api" / "omi-local.db"
 HOST = os.environ.get("OMI_LOCAL_API_HOST", "127.0.0.1")
 PORT = int(os.environ.get("OMI_LOCAL_API_PORT", "10201"))
 DB_PATH = Path(os.environ.get("OMI_LOCAL_API_DB_PATH", str(DEFAULT_DB_PATH))).expanduser()
+REQUIRE_LOOPBACK = os.environ.get("OMI_LOCAL_API_REQUIRE_LOOPBACK", "1") != "0"
+
+
+def is_loopback_host(host: str | None) -> bool:
+    if not host:
+        return False
+    normalized = host.strip().lower()
+    if normalized == "localhost" or normalized.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False
+
+
+def is_loopback_origin(origin: str | None) -> bool:
+    if not origin:
+        return False
+    try:
+        parsed = urlparse(origin)
+    except ValueError:
+        return False
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    return is_loopback_host(parsed.hostname)
+
+
+def cors_allowed_origin(origin: str | None) -> str | None:
+    return origin if is_loopback_origin(origin) else None
 
 
 def utc_now() -> str:
@@ -95,8 +124,7 @@ class LocalStore:
 
     def _init_db(self) -> None:
         with self._lock, self._connect() as conn:
-            conn.executescript(
-                """
+            conn.executescript("""
                 CREATE TABLE IF NOT EXISTS chat_sessions (
                     id TEXT PRIMARY KEY,
                     title TEXT NOT NULL,
@@ -145,41 +173,34 @@ class LocalStore:
                     cost_usd REAL NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL
                 );
-                """
-            )
+                """)
             self._backfill_default_chat_session_in_conn(conn)
 
     def _backfill_default_chat_session_in_conn(self, conn: sqlite3.Connection) -> None:
         """Attach legacy default-chat messages to an explicit local chat session."""
-        legacy_count = conn.execute(
-            """
+        legacy_count = conn.execute("""
             SELECT COUNT(*) AS total
             FROM messages
             WHERE session_id IS NULL OR session_id = ''
-            """
-        ).fetchone()["total"]
+            """).fetchone()["total"]
         if not legacy_count:
             return
 
         session_id = "local-default-chat"
-        first = conn.execute(
-            """
+        first = conn.execute("""
             SELECT text, created_at
             FROM messages
             WHERE session_id IS NULL OR session_id = ''
             ORDER BY created_at ASC
             LIMIT 1
-            """
-        ).fetchone()
-        last = conn.execute(
-            """
+            """).fetchone()
+        last = conn.execute("""
             SELECT text, created_at
             FROM messages
             WHERE session_id IS NULL OR session_id = ''
             ORDER BY created_at DESC
             LIMIT 1
-            """
-        ).fetchone()
+            """).fetchone()
         created_at = first["created_at"] if first else utc_now()
         updated_at = last["created_at"] if last else created_at
         preview = last["text"] if last else None
@@ -481,11 +502,15 @@ class LocalAPIHandler(BaseHTTPRequestHandler):
     server_version = "omi-local-api/0.1"
 
     def do_OPTIONS(self) -> None:
+        if not self._ensure_allowed_client():
+            return
         self.send_response(HTTPStatus.NO_CONTENT)
         self._cors_headers()
         self.end_headers()
 
     def do_GET(self) -> None:
+        if not self._ensure_allowed_client():
+            return
         path, query = self._path_and_query()
         if path in {"/", "/health"}:
             self._send_json({"status": "ok", "mode": "omi-local", "db_path": str(DB_PATH)})
@@ -548,6 +573,8 @@ class LocalAPIHandler(BaseHTTPRequestHandler):
         self._send_error(HTTPStatus.NOT_FOUND, "not found")
 
     def do_POST(self) -> None:
+        if not self._ensure_allowed_client():
+            return
         path, _query = self._path_and_query()
         payload = self._read_json()
         if payload is None:
@@ -593,6 +620,8 @@ class LocalAPIHandler(BaseHTTPRequestHandler):
         self._send_error(HTTPStatus.NOT_FOUND, "not found")
 
     def do_PATCH(self) -> None:
+        if not self._ensure_allowed_client():
+            return
         path, _query = self._path_and_query()
         payload = self._read_json()
         if payload is None:
@@ -630,6 +659,8 @@ class LocalAPIHandler(BaseHTTPRequestHandler):
         self._send_error(HTTPStatus.NOT_FOUND, "not found")
 
     def do_DELETE(self) -> None:
+        if not self._ensure_allowed_client():
+            return
         path, query = self._path_and_query()
         if match := re.fullmatch(r"/v2/chat-sessions/([^/]+)", path):
             STORE.delete_session(match.group(1))
@@ -719,12 +750,30 @@ class LocalAPIHandler(BaseHTTPRequestHandler):
         self._send_json({"detail": message}, status)
 
     def _cors_headers(self) -> None:
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = cors_allowed_origin(self.headers.get("Origin"))
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
         self.send_header(
             "Access-Control-Allow-Headers",
             "Authorization, Content-Type, X-App-Platform, X-Request-Start-Time",
         )
         self.send_header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+
+    def _ensure_allowed_client(self) -> bool:
+        if not REQUIRE_LOOPBACK:
+            return True
+        client_host = self.client_address[0] if self.client_address else None
+        if not is_loopback_host(client_host):
+            self._send_error(HTTPStatus.FORBIDDEN, "omi-local-api only accepts loopback clients")
+            return False
+
+        origin = self.headers.get("Origin")
+        if origin and not is_loopback_origin(origin):
+            self._send_error(HTTPStatus.FORBIDDEN, "origin must be loopback")
+            return False
+
+        return True
 
 
 def main() -> int:
