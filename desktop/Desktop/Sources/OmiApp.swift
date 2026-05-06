@@ -1,6 +1,5 @@
 import FirebaseAuth
 import FirebaseCore
-import Mixpanel
 import Sentry
 import Sparkle
 import SwiftUI
@@ -336,9 +335,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
           if let exceptions = event.exceptions,
             exceptions.contains(where: { exc in
               let value = exc.value ?? ""
-              return exc.type == "NSURLErrorDomain" && (
-                value.contains("Code=-999") || value.contains("Code: -999")
-              )
+              return exc.type == "NSURLErrorDomain"
+                && (value.contains("Code=-999") || value.contains("Code: -999"))
             })
           {
             return nil
@@ -369,7 +367,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       }
     }
 
-    // Initialize analytics (MixPanel + PostHog)
+    // Initialize analytics (PostHog)
     if localMode {
       log("Analytics disabled in local mode")
     } else {
