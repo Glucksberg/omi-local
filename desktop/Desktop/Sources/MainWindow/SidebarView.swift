@@ -1103,7 +1103,7 @@ struct SidebarView: View {
 
   private func refreshLocalTTSStatus() async {
     guard LocalMode.isEnabled, LocalMode.isTTSEnabled, let base = LocalMode.localTTSURL,
-      let url = URL(string: base + "status")
+      let url = URL(string: base + "health")
     else {
       await MainActor.run {
         localTTSProviderStatus = nil
