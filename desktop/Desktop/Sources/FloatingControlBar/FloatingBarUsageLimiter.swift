@@ -26,6 +26,12 @@ final class FloatingBarUsageLimiter: ObservableObject {
     /// Fetch the user's subscription plan and usage quota from the backend.
     /// Call on app launch, sign-in, and after checkout completes.
     func fetchPlan() async {
+        guard !LocalMode.isEnabled else {
+            hasPaidPlan = true
+            serverQuota = nil
+            optimisticDelta = 0
+            return
+        }
         do {
             let response = try await APIClient.shared.getUserSubscription()
             applyPlan(plan: response.subscription.plan, status: response.subscription.status)
@@ -37,6 +43,7 @@ final class FloatingBarUsageLimiter: ObservableObject {
 
     /// Sync quota from the server, resetting the optimistic delta.
     func syncQuota() async {
+        guard !LocalMode.isEnabled else { return }
         if let quota = await APIClient.shared.fetchChatUsageQuota() {
             applyQuota(quota)
         }

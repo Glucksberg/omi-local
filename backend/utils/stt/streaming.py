@@ -21,11 +21,14 @@ headers = {"Authorization": f"Token {os.getenv('DEEPGRAM_API_KEY')}", "Content-T
 
 class STTService(str, Enum):
     deepgram = "deepgram"
+    parakeet = "parakeet"
 
     @staticmethod
     def get_model_name(value):
         if value == STTService.deepgram:
             return 'deepgram_streaming'
+        if value == STTService.parakeet:
+            return os.getenv('PARAKEET_ASR_MODEL', 'nvidia/parakeet-tdt-0.6b-v3')
 
 
 deepgram_nova3_multi_languages = {
@@ -139,7 +142,12 @@ deepgram_nova3_languages = {
 }
 
 
-def get_stt_service_for_language(language: str, multi_lang_enabled: bool = True):
+def get_stt_service_for_language(
+    language: str, multi_lang_enabled: bool = True, preferred_service: Optional[str] = None
+):
+    if preferred_service == STTService.parakeet.value:
+        return STTService.parakeet, language or 'en', STTService.get_model_name(STTService.parakeet)
+
     if multi_lang_enabled and language in deepgram_nova3_multi_languages:
         return STTService.deepgram, 'multi', 'nova-3'
     if language in deepgram_nova3_languages:

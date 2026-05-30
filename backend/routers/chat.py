@@ -36,7 +36,8 @@ from utils.chat import (
     transcribe_voice_message_segment,
     transcribe_pcm_bytes,
 )
-from utils.stt.streaming import process_audio_dg, get_stt_service_for_language
+from utils.stt.streaming import STTService, process_audio_dg, get_stt_service_for_language
+from utils.stt.parakeet import process_audio_parakeet
 from utils.llm.persona import initial_persona_chat_message
 from utils.llm.chat import initial_chat_message
 from utils.llm.goals import extract_and_update_goal_progress
@@ -683,6 +684,7 @@ async def transcribe_voice_message_stream(
     codec: str = 'linear16',
     channels: int = 1,
     keywords: Optional[str] = None,
+    stt_service: Optional[str] = None,
 ):
     """WebSocket endpoint for PTT live mode transcription-only streaming.
 
@@ -750,9 +752,7 @@ async def transcribe_voice_message_stream(
     bytes_per_second = sample_rate * channels * 2
     stt_buffer_flush_size = int(bytes_per_second * 0.03)
 
-    # PTT transcribe-stream always uses Deepgram (lightweight, no conversation lifecycle).
-    # get_stt_service_for_language resolves the language/model for the DG call.
-    _, stt_language, stt_model = get_stt_service_for_language(language)
+    stt_service, stt_language, stt_model = get_stt_service_for_language(language, preferred_service=stt_service)
     context_keywords = _parse_context_keywords(keywords)
 
     loop = asyncio.get_running_loop()
@@ -782,15 +782,37 @@ async def transcribe_voice_message_stream(
                 break
 
     try:
-        dg_socket = await process_audio_dg(
-            stream_transcript,
-            language=stt_language,
-            sample_rate=sample_rate,
-            channels=channels,
-            model=stt_model,
-            keywords=context_keywords,
-            is_active=lambda: websocket_active,
-        )
+        if stt_service == STTService.parakeet:
+            dg_socket = await process_audio_parakeet(
+                stream_transcript,
+                language=stt_language,
+                sample_rate=sample_rate,
+                channels=channels,
+                model=stt_model,
+                is_active=lambda: websocket_active,
+            )
+            if dg_socket is None:
+                logger.warning('transcribe-stream: Parakeet unavailable, falling back to Deepgram uid=%s', uid)
+                _, stt_language, stt_model = get_stt_service_for_language(language)
+                dg_socket = await process_audio_dg(
+                    stream_transcript,
+                    language=stt_language,
+                    sample_rate=sample_rate,
+                    channels=channels,
+                    model=stt_model,
+                    keywords=context_keywords,
+                    is_active=lambda: websocket_active,
+                )
+        else:
+            dg_socket = await process_audio_dg(
+                stream_transcript,
+                language=stt_language,
+                sample_rate=sample_rate,
+                channels=channels,
+                model=stt_model,
+                keywords=context_keywords,
+                is_active=lambda: websocket_active,
+            )
 
         if dg_socket is None:
             logger.error(f'transcribe-stream: failed to connect to Deepgram uid={uid}')

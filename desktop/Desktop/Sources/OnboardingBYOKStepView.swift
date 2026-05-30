@@ -15,6 +15,7 @@ struct OnboardingBYOKStepView: View {
   @AppStorage(BYOKProvider.anthropic.storageKey) private var anthropicKey: String = ""
   @AppStorage(BYOKProvider.gemini.storageKey) private var geminiKey: String = ""
   @AppStorage(BYOKProvider.deepgram.storageKey) private var deepgramKey: String = ""
+  @AppStorage(BYOKProvider.parakeet.storageKey) private var parakeetKey: String = ""
 
   @State private var isActivating = false
   @State private var activationError: String?
@@ -41,6 +42,11 @@ struct OnboardingBYOKStepView: View {
         keyField(provider: .anthropic, binding: $anthropicKey, help: "Used for Claude chat.")
         keyField(provider: .gemini, binding: $geminiKey, help: "Used for proactive AI.")
         keyField(provider: .deepgram, binding: $deepgramKey, help: "Used for transcription.")
+        keyField(
+          provider: .parakeet,
+          binding: $parakeetKey,
+          help: "Optional — used for NVIDIA Parakeet ASR when available."
+        )
 
         if let activationError {
           Text(activationError)
@@ -67,8 +73,9 @@ struct OnboardingBYOKStepView: View {
   }
 
   private var allKeysProvided: Bool {
-    [openaiKey, anthropicKey, geminiKey, deepgramKey].allSatisfy {
-      !$0.trimmingCharacters(in: .whitespaces).isEmpty
+    BYOKProvider.byokPlanProviders.allSatisfy {
+      let key = APIKeyService.byokKey($0) ?? ""
+      return !key.trimmingCharacters(in: .whitespaces).isEmpty
     }
   }
 
@@ -132,13 +139,16 @@ struct OnboardingBYOKStepView: View {
 
     // Step 1: ping each provider. Refuse activation if any key is rejected —
     // otherwise the user pays a subscription they shouldn't and nothing works.
-    let keysToCheck: [BYOKProvider: String] = [
+    var keysToCheck: [BYOKProvider: String] = [
       .openai: openaiKey,
       .anthropic: anthropicKey,
       .gemini: geminiKey,
       .deepgram: deepgramKey,
     ]
-    for provider in BYOKProvider.allCases {
+    if !parakeetKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      keysToCheck[.parakeet] = parakeetKey
+    }
+    for provider in keysToCheck.keys {
       keyStatuses[provider] = .checking
     }
     let results = await BYOKValidator.validateAll(keysToCheck)
@@ -156,7 +166,7 @@ struct OnboardingBYOKStepView: View {
 
     // Step 2: all four authenticate — flip the backend flag.
     do {
-      try await APIClient.shared.activateBYOK(fingerprints: BYOKProvider.allCases.reduce(into: [:]) {
+      try await APIClient.shared.activateBYOK(fingerprints: BYOKProvider.byokPlanProviders.reduce(into: [:]) {
         acc, provider in
         if let key = APIKeyService.byokKey(provider) {
           acc[provider.rawValue] = APIKeyService.byokFingerprint(key)

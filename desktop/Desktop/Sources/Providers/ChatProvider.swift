@@ -1142,10 +1142,114 @@ A screenshot may be attached — use it silently only if relevant. Never mention
 
     // MARK: - Session Management
 
+    private func localOrRemoteCreateChatSession(title: String?, appId: String?) async throws -> ChatSession {
+        if LocalMode.isEnabled {
+            return try await LocalChatStore.shared.createSession(title: title, appId: appId)
+        }
+        return try await APIClient.shared.createChatSession(title: title, appId: appId)
+    }
+
+    private func localOrRemoteUpdateChatSession(
+        sessionId: String,
+        title: String? = nil,
+        starred: Bool? = nil
+    ) async throws -> ChatSession {
+        if LocalMode.isEnabled {
+            guard let session = try await LocalChatStore.shared.updateSession(
+                sessionId: sessionId,
+                title: title,
+                starred: starred
+            ) else {
+                throw LocalChatStoreError.databaseUnavailable
+            }
+            return session
+        }
+        return try await APIClient.shared.updateChatSession(sessionId: sessionId, title: title, starred: starred)
+    }
+
+    private func localOrRemoteDeleteChatSession(sessionId: String) async throws {
+        if LocalMode.isEnabled {
+            try await LocalChatStore.shared.deleteSession(sessionId: sessionId)
+            return
+        }
+        try await APIClient.shared.deleteChatSession(sessionId: sessionId)
+    }
+
+    private func localOrRemoteGetMessages(
+        appId: String?,
+        sessionId: String?,
+        limit: Int,
+        offset: Int = 0
+    ) async throws -> [ChatMessageDB] {
+        if LocalMode.isEnabled {
+            return try await LocalChatStore.shared.fetchMessages(
+                appId: appId,
+                sessionId: sessionId,
+                limit: limit,
+                offset: offset
+            )
+        }
+        if let sessionId {
+            return try await APIClient.shared.getMessages(sessionId: sessionId, limit: limit, offset: offset)
+        }
+        return try await APIClient.shared.getMessages(appId: appId, limit: limit, offset: offset)
+    }
+
+    private func localOrRemoteSaveMessage(
+        text: String,
+        sender: String,
+        appId: String?,
+        sessionId: String?,
+        metadata: String? = nil
+    ) async throws -> SaveMessageResponse {
+        if LocalMode.isEnabled {
+            return try await LocalChatStore.shared.saveMessage(
+                text: text,
+                sender: sender,
+                appId: appId,
+                sessionId: sessionId,
+                metadata: metadata
+            )
+        }
+        return try await APIClient.shared.saveMessage(
+            text: text,
+            sender: sender,
+            appId: appId,
+            sessionId: sessionId,
+            metadata: metadata
+        )
+    }
+
+    private func localOrRemoteDeleteMessages(appId: String?) async throws -> MessageDeleteResponse {
+        if LocalMode.isEnabled {
+            return try await LocalChatStore.shared.deleteMessages(appId: appId)
+        }
+        return try await APIClient.shared.deleteMessages(appId: appId)
+    }
+
     /// Fetch all chat sessions for the current app (retries up to 3 times on failure)
     func fetchSessions() async {
         isLoadingSessions = true
         defer { isLoadingSessions = false }
+
+        if LocalMode.isEnabled {
+            do {
+                sessions = try await LocalChatStore.shared.fetchSessions(
+                    appId: selectedAppId,
+                    starred: showStarredOnly ? true : nil
+                )
+                sessionsLoadError = nil
+                if currentSession == nil, let mostRecent = sessions.first {
+                    await selectSession(mostRecent)
+                }
+                log("ChatProvider loaded \(sessions.count) local sessions")
+            } catch {
+                logError("Failed to load local chat sessions", error: error)
+                sessions = []
+                sessionsLoadError = "Failed to load local chats"
+            }
+            return
+        }
 
         let maxAttempts = 3
         let delays: [UInt64] = [1_000_000_000, 2_000_000_000] // 1s, 2s
@@ -1193,7 +1297,7 @@ A screenshot may be attached — use it silently only if relevant. Never mention
     ///   - appId: Override app ID (e.g. "task-chat" to isolate task sessions from default chat)
     func createNewSession(title: String? = nil, skipGreeting: Bool = false, appId: String? = nil) async -> ChatSession? {
         do {
-            let session = try await APIClient.shared.createChatSession(title: title, appId: appId ?? selectedAppId)
+            let session = try await localOrRemoteCreateChatSession(title: title, appId: appId ?? selectedAppId)
             sessions.insert(session, at: 0)
             currentSession = session
             isInDefaultChat = false
@@ -1261,7 +1365,8 @@ A screenshot may be attached — use it silently only if relevant. Never mention
         hasMoreMessages = false
 
         do {
-            let persistedMessages = try await APIClient.shared.getMessages(
+            let persistedMessages = try await localOrRemoteGetMessages(
+                appId: nil,
                 sessionId: session.id,
                 limit: messagesPageSize
             )
@@ -1289,14 +1394,16 @@ A screenshot may be attached — use it silently only if relevant. Never mention
             let offset = messages.count
             let olderMessages: [ChatMessageDB]
             if let sessionId = currentSessionId {
-                olderMessages = try await APIClient.shared.getMessages(
+                olderMessages = try await localOrRemoteGetMessages(
+                    appId: nil,
                     sessionId: sessionId,
                     limit: messagesPageSize,
                     offset: offset
                 )
             } else {
-                olderMessages = try await APIClient.shared.getMessages(
+                olderMessages = try await localOrRemoteGetMessages(
                     appId: selectedAppId,
+                    sessionId: nil,
                     limit: messagesPageSize,
                     offset: offset
                 )
@@ -1330,7 +1437,7 @@ A screenshot may be attached — use it silently only if relevant. Never mention
     func deleteSession(_ session: ChatSession) async {
         deletingSessionIds.insert(session.id)
         do {
-            try await APIClient.shared.deleteChatSession(sessionId: session.id)
+            try await localOrRemoteDeleteChatSession(sessionId: session.id)
             deletingSessionIds.remove(session.id)
             sessions.removeAll { $0.id == session.id }
 
@@ -1356,7 +1463,7 @@ A screenshot may be attached — use it silently only if relevant. Never mention
     /// Toggle starred status for a session
     func toggleStarred(_ session: ChatSession) async {
         do {
-            let updated = try await APIClient.shared.updateChatSession(
+            let updated = try await localOrRemoteUpdateChatSession(
                 sessionId: session.id,
                 starred: !session.starred
             )
@@ -1380,7 +1487,7 @@ A screenshot may be attached — use it silently only if relevant. Never mention
     /// Update session title (user-initiated rename)
     func updateSessionTitle(_ session: ChatSession, title: String) async {
         do {
-            let updated = try await APIClient.shared.updateChatSession(
+            let updated = try await localOrRemoteUpdateChatSession(
                 sessionId: session.id,
                 title: title
             )
@@ -1889,17 +1996,19 @@ A screenshot may be attached — use it silently only if relevant. Never mention
     /// Initialize chat: fetch sessions and load messages
     func initialize() async {
         // Seed cumulative Omi AI cost from backend now that auth is ready (background, no latency)
-        Task.detached(priority: .background) { [weak self] in
-            guard let serverCost = await APIClient.shared.fetchTotalOmiAICost() else { return }
-            guard let self else { return }
-            await MainActor.run {
-                // Always trust the server value — it's the authoritative total
-                self.omiAICumulativeCostUsd = serverCost
-                log("ChatProvider: Seeded Omi AI cumulative cost from backend: $\(String(format: "%.4f", serverCost))")
-                // Show upgrade prompt if over threshold but don't block chat
-                if self.bridgeMode != BridgeMode.userClaude.rawValue && serverCost >= 50.0 {
-                    log("ChatProvider: Omi AI cost at $\(String(format: "%.2f", serverCost)) on startup — showing upgrade prompt")
-                    self.showOmiThresholdAlert = true
+        if !LocalMode.isEnabled {
+            Task.detached(priority: .background) { [weak self] in
+                guard let serverCost = await APIClient.shared.fetchTotalOmiAICost() else { return }
+                guard let self else { return }
+                await MainActor.run {
+                    // Always trust the server value — it's the authoritative total
+                    self.omiAICumulativeCostUsd = serverCost
+                    log("ChatProvider: Seeded Omi AI cumulative cost from backend: $\(String(format: "%.4f", serverCost))")
+                    // Show upgrade prompt if over threshold but don't block chat
+                    if self.bridgeMode != BridgeMode.userClaude.rawValue && serverCost >= 50.0 {
+                        log("ChatProvider: Omi AI cost at $\(String(format: "%.2f", serverCost)) on startup — showing upgrade prompt")
+                        self.showOmiThresholdAlert = true
+                    }
                 }
             }
         }
@@ -2139,14 +2248,37 @@ A screenshot may be attached — use it silently only if relevant. Never mention
         errorMessage = nil
         hasMoreMessages = false
 
+        if LocalMode.isEnabled {
+            do {
+                let persistedMessages = try await LocalChatStore.shared.fetchMessages(
+                    appId: selectedAppId,
+                    sessionId: nil,
+                    limit: messagesPageSize,
+                    offset: 0
+                )
+                messages = persistedMessages.map(ChatMessage.init(from:))
+                    .sorted(by: { $0.createdAt < $1.createdAt })
+                hasMoreMessages = persistedMessages.count == messagesPageSize
+                sessionsLoadError = nil
+                log("ChatProvider loaded \(messages.count) local default chat messages")
+            } catch {
+                logError("Failed to load local default chat messages", error: error)
+                messages = []
+                sessionsLoadError = "Failed to load local messages"
+            }
+            isLoading = false
+            return
+        }
+
         let maxAttempts = 3
         let delays: [UInt64] = [1_000_000_000, 2_000_000_000] // 1s, 2s
         var lastError: Error?
 
         for attempt in 1...maxAttempts {
             do {
-                let persistedMessages = try await APIClient.shared.getMessages(
+                let persistedMessages = try await localOrRemoteGetMessages(
                     appId: selectedAppId,
+                    sessionId: nil,
                     limit: messagesPageSize
                 )
                 messages = persistedMessages.map(ChatMessage.init(from:))
@@ -2178,6 +2310,7 @@ A screenshot may be attached — use it silently only if relevant. Never mention
     /// Fetch new messages from other platforms (e.g. mobile).
     /// Merges new messages into the existing array without disrupting the UI.
     private func pollForNewMessages() async {
+        guard !LocalMode.isEnabled else { return }
         // Prevent overlapping fetches from activation + Cmd+R firing together
         guard pollGate.tryEnter() else { return }
         defer { pollGate.exit() }
@@ -2315,16 +2448,17 @@ A screenshot may be attached — use it silently only if relevant. Never mention
         let localId = userMessage.id
         Task { [weak self] in
             do {
-                let response = try await APIClient.shared.saveMessage(
+                guard let self else { return }
+                let response = try await self.localOrRemoteSaveMessage(
                     text: trimmedText,
                     sender: "human",
                     appId: capturedAppId,
                     sessionId: capturedSessionId
                 )
                 await MainActor.run {
-                    if let index = self?.messages.firstIndex(where: { $0.id == localId }) {
-                        self?.messages[index].id = response.id
-                        self?.messages[index].isSynced = true
+                    if let index = self.messages.firstIndex(where: { $0.id == localId }) {
+                        self.messages[index].id = response.id
+                        self.messages[index].isSynced = true
                     }
                 }
                 log("Saved follow-up message to backend: \(response.id)")
@@ -2355,16 +2489,17 @@ A screenshot may be attached — use it silently only if relevant. Never mention
 
         Task { [weak self] in
             do {
-                let response = try await APIClient.shared.saveMessage(
+                guard let self else { return }
+                let response = try await self.localOrRemoteSaveMessage(
                     text: trimmedText,
                     sender: "ai",
                     appId: capturedAppId,
                     sessionId: capturedSessionId
                 )
                 await MainActor.run {
-                    if let index = self?.messages.firstIndex(where: { $0.id == localId }) {
-                        self?.messages[index].id = response.id
-                        self?.messages[index].isSynced = true
+                    if let index = self.messages.firstIndex(where: { $0.id == localId }) {
+                        self.messages[index].id = response.id
+                        self.messages[index].isSynced = true
                     }
                 }
                 log("Saved assistant message to backend: \(response.id)")
@@ -2590,7 +2725,8 @@ Read `\(heartbeatFilePath)` if it exists. Check only safe, useful background con
         if !isFollowUp {
             Task { [weak self] in
                 do {
-                    let response = try await APIClient.shared.saveMessage(
+                    guard let self else { return }
+                    let response = try await self.localOrRemoteSaveMessage(
                         text: trimmedText,
                         sender: "human",
                         appId: capturedAppId,
@@ -2599,9 +2735,9 @@ Read `\(heartbeatFilePath)` if it exists. Check only safe, useful background con
                     // Adopt the server ID (local UUID → server ID) and mark synced.
                     // isSynced=true enables rating buttons on the message bubble.
                     await MainActor.run {
-                        if let index = self?.messages.firstIndex(where: { $0.id == userMessageId }) {
-                            self?.messages[index].id = response.id
-                            self?.messages[index].isSynced = true
+                        if let index = self.messages.firstIndex(where: { $0.id == userMessageId }) {
+                            self.messages[index].id = response.id
+                            self.messages[index].isSynced = true
                         }
                     }
                     log("Saved user message to backend: \(response.id)")
@@ -2845,7 +2981,7 @@ Read `\(heartbeatFilePath)` if it exists. Check only safe, useful background con
             if !textToSave.isEmpty {
                 do {
                     let toolMetadata = serializeToolCallMetadata(messageId: aiMessageId)
-                    let response = try await APIClient.shared.saveMessage(
+                    let response = try await localOrRemoteSaveMessage(
                         text: textToSave,
                         sender: "ai",
                         appId: capturedAppId,
@@ -2905,7 +3041,7 @@ Read `\(heartbeatFilePath)` if it exists. Check only safe, useful background con
             // here would double-count.
             let isOmiMode = bridgeMode != BridgeMode.userClaude.rawValue
             let isPiMono = bridgeMode == BridgeMode.piMono.rawValue
-            if !isPiMono {
+            if !LocalMode.isEnabled && !isPiMono {
                 let accountType = isOmiMode ? "omi" : "personal"
                 let r = queryResult
                 Task.detached(priority: .background) {
@@ -2960,7 +3096,8 @@ Read `\(heartbeatFilePath)` if it exists. Check only safe, useful background con
                     let partialToolMetadata = self.serializeToolCallMetadata(messageId: aiMessageId)
                     Task { [weak self] in
                         do {
-                            let response = try await APIClient.shared.saveMessage(
+                            guard let self else { return }
+                            let response = try await self.localOrRemoteSaveMessage(
                                 text: partialText,
                                 sender: "ai",
                                 appId: capturedAppId,
@@ -2968,9 +3105,9 @@ Read `\(heartbeatFilePath)` if it exists. Check only safe, useful background con
                                 metadata: partialToolMetadata
                             )
                             await MainActor.run {
-                                if let syncIndex = self?.messages.firstIndex(where: { $0.id == aiMessageId }) {
-                                    self?.messages[syncIndex].id = response.id
-                                    self?.messages[syncIndex].isSynced = true
+                                if let syncIndex = self.messages.firstIndex(where: { $0.id == aiMessageId }) {
+                                    self.messages[syncIndex].id = response.id
+                                    self.messages[syncIndex].isSynced = true
                                 }
                             }
                             log("Saved partial AI response to backend: \(response.id)")
@@ -3032,10 +3169,16 @@ Read `\(heartbeatFilePath)` if it exists. Check only safe, useful background con
         }
 
         do {
-            let response = try await APIClient.shared.generateSessionTitle(
-                sessionId: sessionId,
-                messages: messageTuples
-            )
+            let response: GenerateTitleResponse
+            if LocalMode.isEnabled {
+                let firstUserMessage = messageTuples.first { $0.sender == "human" }?.text ?? "New Chat"
+                response = GenerateTitleResponse(title: String(firstUserMessage.prefix(48)))
+            } else {
+                response = try await APIClient.shared.generateSessionTitle(
+                    sessionId: sessionId,
+                    messages: messageTuples
+                )
+            }
 
             // Update session in list
             if let index = sessions.firstIndex(where: { $0.id == sessionId }) {
@@ -3316,7 +3459,7 @@ Read `\(heartbeatFilePath)` if it exists. Check only safe, useful background con
             log("Cleared default chat messages")
             Task {
                 do {
-                    _ = try await APIClient.shared.deleteMessages(appId: selectedAppId)
+                    _ = try await self.localOrRemoteDeleteMessages(appId: selectedAppId)
                 } catch {
                     logError("Failed to clear default chat messages", error: error)
                 }
@@ -3336,7 +3479,7 @@ Read `\(heartbeatFilePath)` if it exists. Check only safe, useful background con
             if let session = sessionToDelete {
                 Task {
                     do {
-                        try await APIClient.shared.deleteChatSession(sessionId: session.id)
+                        try await self.localOrRemoteDeleteChatSession(sessionId: session.id)
                         log("Background deleted chat session: \(session.id)")
                     } catch {
                         logError("Failed to background delete chat session", error: error)

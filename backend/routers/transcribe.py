@@ -75,6 +75,7 @@ from utils.stt.streaming import (
     get_stt_service_for_language,
     process_audio_dg,
 )
+from utils.stt.parakeet import process_audio_parakeet
 from utils.stt.vad_gate import VADStreamingGate, VAD_GATE_MODE, is_gate_enabled
 from utils.fair_use import (
     FAIR_USE_ENABLED,
@@ -310,7 +311,7 @@ async def _stream_handler(
 
     # Determine the best STT service
     stt_service, stt_language, stt_model = get_stt_service_for_language(
-        language, multi_lang_enabled=not single_language_mode
+        language, multi_lang_enabled=not single_language_mode, preferred_service=stt_service
     )
     if not stt_service or not stt_language:
         await websocket.close(code=1008, reason=f"The language is not supported, {language}")
@@ -998,16 +999,40 @@ async def _stream_handler(
                     logger.exception('VAD gate init failed, continuing without gate uid=%s session=%s', uid, session_id)
                     vad_gate = None
 
-            deepgram_socket = await process_audio_dg(
-                stream_transcript,
-                stt_language,
-                sample_rate,
-                1,
-                model=stt_model,
-                keywords=vocabulary[:100] if vocabulary else None,
-                vad_gate=vad_gate,
-                is_active=lambda: websocket_active,
-            )
+            if stt_service == STTService.parakeet:
+                deepgram_socket = await process_audio_parakeet(
+                    stream_transcript,
+                    stt_language,
+                    sample_rate,
+                    1,
+                    model=stt_model,
+                    is_active=lambda: websocket_active,
+                )
+                if deepgram_socket is None:
+                    logger.warning(
+                        'Parakeet STT unavailable, falling back to Deepgram uid=%s session=%s', uid, session_id
+                    )
+                    deepgram_socket = await process_audio_dg(
+                        stream_transcript,
+                        stt_language,
+                        sample_rate,
+                        1,
+                        model='nova-3',
+                        keywords=vocabulary[:100] if vocabulary else None,
+                        vad_gate=vad_gate,
+                        is_active=lambda: websocket_active,
+                    )
+            else:
+                deepgram_socket = await process_audio_dg(
+                    stream_transcript,
+                    stt_language,
+                    sample_rate,
+                    1,
+                    model=stt_model,
+                    keywords=vocabulary[:100] if vocabulary else None,
+                    vad_gate=vad_gate,
+                    is_active=lambda: websocket_active,
+                )
             return None
 
         except Exception as e:

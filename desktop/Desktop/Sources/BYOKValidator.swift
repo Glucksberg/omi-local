@@ -43,6 +43,11 @@ enum BYOKValidator {
         url: URL(string: "https://api.deepgram.com/v1/projects")!,
         headers: ["Authorization": "Token \(trimmed)"]
       )
+    case .parakeet:
+      // NVIDIA-hosted Parakeet ASR key format is currently provider-specific.
+      // No lightweight, low-risk unauthenticated endpoint is available yet,
+      // so skip network validation and treat a non-empty key as accepted.
+      return .ok
     }
   }
 

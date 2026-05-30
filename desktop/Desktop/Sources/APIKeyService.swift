@@ -21,6 +21,10 @@ enum BYOKProvider: String, CaseIterable {
     case anthropic
     case gemini
     case deepgram
+    case parakeet
+
+    /// Providers required to unlock BYOK free-plan access.
+    static let byokPlanProviders: [BYOKProvider] = [.openai, .anthropic, .gemini, .deepgram]
 
     var storageKey: String {
         switch self {
@@ -28,6 +32,7 @@ enum BYOKProvider: String, CaseIterable {
         case .anthropic: return "dev_anthropic_api_key"
         case .gemini: return "dev_gemini_api_key"
         case .deepgram: return "dev_deepgram_api_key"
+        case .parakeet: return "dev_parakeet_api_key"
         }
     }
 
@@ -37,6 +42,7 @@ enum BYOKProvider: String, CaseIterable {
         case .anthropic: return "X-BYOK-Anthropic"
         case .gemini: return "X-BYOK-Gemini"
         case .deepgram: return "X-BYOK-Deepgram"
+        case .parakeet: return "X-BYOK-Parakeet"
         }
     }
 
@@ -46,6 +52,7 @@ enum BYOKProvider: String, CaseIterable {
         case .anthropic: return "Anthropic"
         case .gemini: return "Gemini"
         case .deepgram: return "Deepgram"
+        case .parakeet: return "Parakeet"
         }
     }
 }
@@ -207,7 +214,7 @@ final class APIKeyService: ObservableObject {
     /// The subscription-bypass gate: when this is true, the user is on the free
     /// plan and we attach their keys to every backend request.
     nonisolated static var isByokActive: Bool {
-        BYOKProvider.allCases.allSatisfy { byokKey($0) != nil }
+        BYOKProvider.byokPlanProviders.allSatisfy { byokKey($0) != nil }
     }
 
     /// SHA-256 fingerprint of a key, used by the backend to detect when the

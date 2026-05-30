@@ -447,7 +447,7 @@ actor AgentBridge {
     // Hard cap: check monthly chat quota before spending any Anthropic tokens.
     // Free / Operator / Unlimited cap by question count; Architect (pro) caps by
     // cost_usd. Raises BridgeError.quotaExceeded if over — caller shows upgrade UI.
-    if let quota = await APIClient.shared.fetchChatUsageQuota(), !quota.allowed {
+    if !LocalMode.isEnabled, let quota = await APIClient.shared.fetchChatUsageQuota(), !quota.allowed {
       throw BridgeError.quotaExceeded(
         plan: quota.plan,
         unit: quota.unit,

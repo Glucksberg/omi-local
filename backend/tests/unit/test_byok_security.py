@@ -111,7 +111,7 @@ class TestWebSocketExtraction:
         ws.headers = headers
         return ws
 
-    def test_extracts_all_four_headers(self):
+    def test_extracts_all_headers(self):
         from utils.byok import extract_byok_from_websocket
 
         ws = self._make_ws(
@@ -120,10 +120,17 @@ class TestWebSocketExtraction:
                 'x-byok-anthropic': 'sk-a',
                 'x-byok-gemini': 'sk-g',
                 'x-byok-deepgram': 'sk-d',
+                'x-byok-parakeet': 'nvapi-p',
             }
         )
         keys = extract_byok_from_websocket(ws)
-        assert keys == {'openai': 'sk-o', 'anthropic': 'sk-a', 'gemini': 'sk-g', 'deepgram': 'sk-d'}
+        assert keys == {
+            'openai': 'sk-o',
+            'anthropic': 'sk-a',
+            'gemini': 'sk-g',
+            'deepgram': 'sk-d',
+            'parakeet': 'nvapi-p',
+        }
 
     def test_returns_empty_when_no_headers(self):
         from utils.byok import extract_byok_from_websocket
@@ -398,10 +405,10 @@ class TestTranscriptionCreditBYOKBypass:
 
 
 class TestBYOKHeadersConstant:
-    def test_headers_has_all_four_providers(self):
+    def test_headers_has_all_supported_providers(self):
         from utils.byok import BYOK_HEADERS
 
-        assert set(BYOK_HEADERS.keys()) == {'openai', 'anthropic', 'gemini', 'deepgram'}
+        assert set(BYOK_HEADERS.keys()) == {'openai', 'anthropic', 'gemini', 'deepgram', 'parakeet'}
 
     def test_headers_are_lowercase(self):
         from utils.byok import BYOK_HEADERS

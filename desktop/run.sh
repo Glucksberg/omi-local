@@ -429,6 +429,12 @@ if [ -d "$CSPROTOBUF_FRAMEWORK" ]; then
     rm -rf "$APP_BUNDLE/Contents/Frameworks/CSSwiftProtobuf.framework"
     cp -R "$CSPROTOBUF_FRAMEWORK" "$APP_BUNDLE/Contents/Frameworks/"
 fi
+CONTENTSQUARE_FRAMEWORK="Desktop/.build/arm64-apple-macosx/debug/ContentsquareCore.framework"
+if [ -d "$CONTENTSQUARE_FRAMEWORK" ]; then
+    substep "Copying ContentsquareCore framework"
+    rm -rf "$APP_BUNDLE/Contents/Frameworks/ContentsquareCore.framework"
+    cp -R "$CONTENTSQUARE_FRAMEWORK" "$APP_BUNDLE/Contents/Frameworks/"
+fi
 
 # Copy libwebp dylibs and rewrite load paths
 WEBP_LIB="$(pkg-config --variable=libdir libwebp 2>/dev/null)/libwebp.7.dylib"
@@ -624,6 +630,10 @@ if [ -n "$SIGN_IDENTITY" ]; then
     if [ -d "$APP_BUNDLE/Contents/Frameworks/CSSwiftProtobuf.framework" ]; then
         substep "Signing CSSwiftProtobuf framework"
         codesign --force --options runtime --sign "$SIGN_IDENTITY" "$APP_BUNDLE/Contents/Frameworks/CSSwiftProtobuf.framework"
+    fi
+    if [ -d "$APP_BUNDLE/Contents/Frameworks/ContentsquareCore.framework" ]; then
+        substep "Signing ContentsquareCore framework"
+        codesign --force --options runtime --sign "$SIGN_IDENTITY" "$APP_BUNDLE/Contents/Frameworks/ContentsquareCore.framework"
     fi
     if [ -f "$APP_BUNDLE/Contents/Frameworks/libsharpyuv.0.dylib" ]; then
         substep "Signing libsharpyuv"

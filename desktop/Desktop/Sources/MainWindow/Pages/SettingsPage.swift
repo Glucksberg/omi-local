@@ -381,6 +381,7 @@ struct SettingsContentView: View {
   @AppStorage("dev_anthropic_api_key") private var devAnthropicKey: String = ""
   @AppStorage("dev_openai_api_key") private var devOpenAIKey: String = ""
   @AppStorage("dev_deepgram_api_key") private var devDeepgramKey: String = ""
+  @AppStorage("dev_parakeet_api_key") private var devParakeetKey: String = ""
   @State private var byokKeyStatuses: [BYOKProvider: BYOKValidator.Status] = [:]
   @State private var byokActivationError: String?
 
@@ -2036,7 +2037,7 @@ struct SettingsContentView: View {
             Text(
               APIKeyService.isByokActive
                 ? "You're using your own OpenAI, Anthropic, Gemini, and Deepgram keys. No subscription."
-                : "Provide your own OpenAI, Anthropic, Gemini, and Deepgram keys to skip the subscription entirely."
+                : "Provide your own OpenAI, Anthropic, Gemini, and Deepgram keys to skip the subscription entirely. Parakeet is optional for transcription."
             )
             .scaledFont(size: 12)
             .foregroundColor(OmiColors.textTertiary)
@@ -5417,6 +5418,14 @@ struct SettingsContentView: View {
         value: $devDeepgramKey
       )
 
+      developerKeyField(
+        provider: .parakeet,
+        title: "Parakeet API Key",
+        subtitle: "Optional: NVIDIA Parakeet ASR override for transcription.",
+        settingId: "advanced.devkeys.parakeet",
+        value: $devParakeetKey
+      )
+
       if let byokActivationError {
         settingsCard(settingId: "advanced.devkeys.error") {
           HStack(spacing: 10) {
@@ -5448,16 +5457,24 @@ struct SettingsContentView: View {
     .onChange(of: devAnthropicKey) { _, _ in refreshBYOKActivation() }
     .onChange(of: devGeminiKey) { _, _ in refreshBYOKActivation() }
     .onChange(of: devDeepgramKey) { _, _ in refreshBYOKActivation() }
+    .onChange(of: devParakeetKey) { _, _ in refreshBYOKActivation() }
   }
 
   private var hasAnyBYOKKey: Bool {
     !devOpenAIKey.isEmpty || !devAnthropicKey.isEmpty || !devGeminiKey.isEmpty
-      || !devDeepgramKey.isEmpty
+      || !devDeepgramKey.isEmpty || !devParakeetKey.isEmpty
   }
 
   private var hasAllBYOKKeys: Bool {
-    !devOpenAIKey.isEmpty && !devAnthropicKey.isEmpty && !devGeminiKey.isEmpty
-      && !devDeepgramKey.isEmpty
+    BYOKProvider.byokPlanProviders.allSatisfy {
+      switch $0 {
+      case .openai: !devOpenAIKey.isEmpty
+      case .anthropic: !devAnthropicKey.isEmpty
+      case .gemini: !devGeminiKey.isEmpty
+      case .deepgram: !devDeepgramKey.isEmpty
+      default: true
+      }
+    }
   }
 
   @ViewBuilder
@@ -5477,6 +5494,13 @@ struct SettingsContentView: View {
           )
           .scaledFont(size: 12)
           .foregroundColor(OmiColors.textTertiary)
+          Text(
+            hasAllBYOKKeys
+              ? "You can keep a Parakeet ASR key set for NVIDIA transcription experiments."
+              : "Optional: set a Parakeet key if you want to route transcription to NVIDIA instead of Deepgram."
+          )
+          .scaledFont(size: 12)
+          .foregroundColor(OmiColors.textTertiary)
         }
         Spacer()
       }
@@ -5488,6 +5512,7 @@ struct SettingsContentView: View {
     devAnthropicKey = ""
     devGeminiKey = ""
     devDeepgramKey = ""
+    devParakeetKey = ""
     Task {
       try? await APIClient.shared.deactivateBYOK()
     }
@@ -5498,8 +5523,14 @@ struct SettingsContentView: View {
       if APIKeyService.isByokActive {
         // Validate before flipping the backend flag — otherwise we'd put the
         // user on the free plan with dead keys and every chat would 401.
-        let snapshot = APIKeyService.byokSnapshot.reduce(into: [BYOKProvider: String]()) {
-          acc, entry in acc[entry.key] = entry.value.key
+        var snapshot = BYOKProvider.byokPlanProviders.reduce(into: [BYOKProvider: String]()) {
+          acc, provider in
+          if let key = APIKeyService.byokKey(provider) {
+            acc[provider] = key
+          }
+        }
+        if let parakeetKey = APIKeyService.byokKey(.parakeet) {
+          snapshot[.parakeet] = parakeetKey
         }
         let results = await BYOKValidator.validateAll(snapshot)
         let allOk = results.allSatisfy {
@@ -5507,8 +5538,11 @@ struct SettingsContentView: View {
           return false
         }
         if allOk {
-          let fingerprints = APIKeyService.byokSnapshot.reduce(into: [String: String]()) {
-            acc, entry in acc[entry.key.rawValue] = entry.value.fingerprint
+          let fingerprints = BYOKProvider.byokPlanProviders.reduce(into: [String: String]()) {
+            acc, provider in
+            if let key = APIKeyService.byokKey(provider) {
+              acc[provider.rawValue] = APIKeyService.byokFingerprint(key)
+            }
           }
           try? await APIClient.shared.activateBYOK(fingerprints: fingerprints)
           await FloatingBarUsageLimiter.shared.fetchPlan()
