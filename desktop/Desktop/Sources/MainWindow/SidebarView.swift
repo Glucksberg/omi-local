@@ -110,6 +110,8 @@ struct SidebarView: View {
   @State private var isFocusPageLoading = false
   @State private var isInsightPageLoading = false
   @State private var isAppsPageLoading = false
+  @State private var localTTSProviderStatus: String?
+  @State private var localTTSReachable = false
 
   // Drag state
   @State private var dragOffset: CGFloat = 0
@@ -1013,6 +1015,9 @@ struct SidebarView: View {
         .stroke(OmiColors.border.opacity(0.45), lineWidth: 1)
     )
     .help("Current voice, transcription, and chat models")
+    .task {
+      await refreshLocalTTSStatus()
+    }
   }
 
   private func modelStatusTag(label: String, value: String, color: Color) -> some View {
@@ -1061,7 +1066,11 @@ struct SidebarView: View {
         return "macOS voice"
       }
 
-      let provider = Self.envValue("OMI_LOCAL_TTS_PROVIDER")?.lowercased() ?? "local"
+      guard localTTSReachable else {
+        return "macOS fallback"
+      }
+
+      let provider = (localTTSProviderStatus ?? Self.envValue("OMI_LOCAL_TTS_PROVIDER"))?.lowercased() ?? "local"
       if provider == "xai" {
         let voice = ShortcutSettings.voiceOption(for: shortcutSettings.selectedVoiceID).name
         return "xAI \(voice)"
@@ -1090,6 +1099,48 @@ struct SidebarView: View {
       ? ModelQoS.Claude.defaultSelection
       : shortcutSettings.selectedModel
     return LocalMode.isEnabled ? selected : "Omi AI"
+  }
+
+  private func refreshLocalTTSStatus() async {
+    guard LocalMode.isEnabled, LocalMode.isTTSEnabled, let base = LocalMode.localTTSURL,
+      let url = URL(string: base + "status")
+    else {
+      await MainActor.run {
+        localTTSProviderStatus = nil
+        localTTSReachable = false
+      }
+      return
+    }
+
+    do {
+      let (data, response) = try await URLSession.shared.data(from: url)
+      guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
+        await MainActor.run {
+          localTTSProviderStatus = nil
+          localTTSReachable = false
+        }
+        return
+      }
+
+      let status = try JSONDecoder().decode(LocalSpeechStatus.self, from: data)
+      await MainActor.run {
+        localTTSProviderStatus = status.tts.provider
+        localTTSReachable = true
+      }
+    } catch {
+      await MainActor.run {
+        localTTSProviderStatus = nil
+        localTTSReachable = false
+      }
+    }
+  }
+
+  private struct LocalSpeechStatus: Decodable {
+    let tts: TTS
+
+    struct TTS: Decodable {
+      let provider: String
+    }
   }
 
   private static func envValue(_ name: String) -> String? {
