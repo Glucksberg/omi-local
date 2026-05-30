@@ -997,10 +997,10 @@ struct SidebarView: View {
     VStack(alignment: .leading, spacing: 5) {
       HStack(spacing: 5) {
         modelStatusTag(label: "STT", value: currentSTTModelLabel, color: OmiColors.purplePrimary)
-        modelStatusTag(label: "LLM", value: currentLLMModelLabel, color: OmiColors.info)
+        modelStatusTag(label: "TTS", value: currentTTSModelLabel, color: OmiColors.success)
       }
 
-      modelStatusTag(label: "TTS", value: currentTTSModelLabel, color: OmiColors.success)
+      modelStatusTag(label: "LLM", value: currentLLMModelLabel, color: OmiColors.info)
     }
     .padding(.horizontal, 10)
     .padding(.vertical, 8)
