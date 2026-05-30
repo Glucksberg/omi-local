@@ -112,9 +112,6 @@ class TranscriptionService {
                let url = String(validatingUTF8: cString), !url.isEmpty {
                 return url.hasSuffix("/") ? url : url + "/"
             }
-            if let cString = getenv("OMI_PYTHON_API_URL"), let url = String(validatingUTF8: cString), !url.isEmpty {
-                return url.hasSuffix("/") ? url : url + "/"
-            }
             return LocalMode.defaultLocalAPIURL
         }
         if let cString = getenv("OMI_PYTHON_API_URL"), let url = String(validatingUTF8: cString), !url.isEmpty {
@@ -157,6 +154,20 @@ class TranscriptionService {
         }
         return result
     }
+
+    private static let streamingBackendBaseURL: String = {
+        if let cString = getenv("OMI_TRANSCRIPTION_API_URL"), let url = String(validatingUTF8: cString), !url.isEmpty {
+            return url.hasSuffix("/") ? url : url + "/"
+        }
+        return pythonBackendBaseURL
+    }()
+
+    private static let preferredSTTService: String? = {
+        if let cString = getenv("OMI_STT_SERVICE"), let service = String(validatingUTF8: cString), !service.isEmpty {
+            return service
+        }
+        return APIKeyService.byokKey(.parakeet) != nil ? "parakeet" : nil
+    }()
 
     // Reconnection (internal for @testable import)
     var reconnectAttempts = 0
@@ -339,7 +350,7 @@ class TranscriptionService {
     }
 
     private func connectToBackend(authHeader: String) {
-        let base = Self.pythonBackendBaseURL
+        let base = Self.streamingBackendBaseURL
             .replacingOccurrences(of: "https://", with: "wss://")
             .replacingOccurrences(of: "http://", with: "ws://")
         let wsBase = base.hasSuffix("/") ? String(base.dropLast()) : base
@@ -352,7 +363,7 @@ class TranscriptionService {
         case .conversation:
             // Full conversation pipeline with speech profiles, speaker assignment, memory events
             path = "/v4/listen"
-            queryItems = [
+            var items = [
                 URLQueryItem(name: "language", value: language),
                 URLQueryItem(name: "sample_rate", value: String(sampleRate)),
                 URLQueryItem(name: "codec", value: encoding),
@@ -361,6 +372,10 @@ class TranscriptionService {
                 URLQueryItem(name: "source", value: "desktop"),
                 URLQueryItem(name: "speaker_auto_assign", value: "enabled"),
             ]
+            if let preferredSTTService = Self.preferredSTTService {
+                items.append(URLQueryItem(name: "stt_service", value: preferredSTTService))
+            }
+            queryItems = items
         case .ptt:
             // PTT-only transcription — no conversation lifecycle
             path = "/v2/voice-message/transcribe-stream"
@@ -372,6 +387,9 @@ class TranscriptionService {
             ]
             if !contextKeywords.isEmpty {
                 items.append(URLQueryItem(name: "keywords", value: contextKeywords.joined(separator: ",")))
+            }
+            if let preferredSTTService = Self.preferredSTTService {
+                items.append(URLQueryItem(name: "stt_service", value: preferredSTTService))
             }
             queryItems = items
         }
@@ -583,7 +601,7 @@ class TranscriptionService {
         do {
             let json = try JSONSerialization.jsonObject(with: data)
 
-            if let array = json as? [[String: Any]] {
+            if json is [[String: Any]] {
                 // JSON array = transcript segments
                 let segments = try JSONDecoder().decode([BackendSegment].self, from: data)
                 if !segments.isEmpty {
@@ -615,6 +633,11 @@ extension TranscriptionService {
             log("TranscriptionService: batch transcription skipped; local provider not configured")
             throw TranscriptionError.localProviderUnavailable
         }
+
+        if preferredSTTService == "parakeet" {
+            return try await batchTranscribeViaStreamingBackend(audioData: audioData, language: language)
+        }
+
         // Always use Firebase auth + Python backend
         let authService = await MainActor.run { AuthService.shared }
         let authHeader = try await authService.getAuthHeader()
@@ -670,7 +693,119 @@ extension TranscriptionService {
         return transcript
     }
 
+    private static func batchTranscribeViaStreamingBackend(
+        audioData: Data,
+        language: String
+    ) async throws -> String? {
+        let base = streamingBackendBaseURL
+            .replacingOccurrences(of: "https://", with: "wss://")
+            .replacingOccurrences(of: "http://", with: "ws://")
+        let wsBase = base.hasSuffix("/") ? String(base.dropLast()) : base
+        guard var components = URLComponents(string: "\(wsBase)/v2/voice-message/transcribe-stream") else {
+            throw TranscriptionError.connectionFailed(NSError(domain: "Invalid backend URL", code: -1))
+        }
+        components.queryItems = [
+            URLQueryItem(name: "language", value: language),
+            URLQueryItem(name: "sample_rate", value: "16000"),
+            URLQueryItem(name: "codec", value: "linear16"),
+            URLQueryItem(name: "channels", value: "1"),
+            URLQueryItem(name: "stt_service", value: "parakeet"),
+        ]
+        guard let url = components.url else {
+            throw TranscriptionError.connectionFailed(NSError(domain: "Invalid URL", code: -1))
+        }
+
+        let session = URLSession(configuration: .default)
+        let task = session.webSocketTask(with: URLRequest(url: url))
+        task.resume()
+        defer {
+            task.cancel(with: .normalClosure, reason: nil)
+            session.invalidateAndCancel()
+        }
+
+        let chunkSize = 3200
+        var offset = 0
+        while offset < audioData.count {
+            let end = min(offset + chunkSize, audioData.count)
+            try await sendWebSocketMessage(.data(audioData.subdata(in: offset..<end)), task: task)
+            offset = end
+        }
+        try await sendWebSocketMessage(.string("finalize"), task: task)
+
+        var transcriptParts: [String] = []
+        while true {
+            do {
+                let message = try await receiveWebSocketMessage(task, timeout: 3.0)
+                let text: String?
+                switch message {
+                case .string(let value):
+                    text = value
+                case .data(let data):
+                    text = String(data: data, encoding: .utf8)
+                @unknown default:
+                    text = nil
+                }
+                guard let text else { continue }
+                if let segments = try? decodeSegments(from: text) {
+                    transcriptParts.append(contentsOf: segments.map(\.text))
+                }
+            } catch is TimeoutError {
+                break
+            }
+        }
+
+        let transcript = transcriptParts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        return transcript.isEmpty ? nil : transcript
+    }
+
+    private static func sendWebSocketMessage(
+        _ message: URLSessionWebSocketTask.Message,
+        task: URLSessionWebSocketTask
+    ) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            task.send(message) { error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume()
+                }
+            }
+        }
+    }
+
+    private static func receiveWebSocketMessage(
+        _ task: URLSessionWebSocketTask,
+        timeout: TimeInterval
+    ) async throws -> URLSessionWebSocketTask.Message {
+        try await withThrowingTaskGroup(of: URLSessionWebSocketTask.Message.self) { group in
+            group.addTask {
+                try await withCheckedThrowingContinuation { continuation in
+                    task.receive { result in
+                        continuation.resume(with: result)
+                    }
+                }
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                throw TimeoutError()
+            }
+            guard let result = try await group.next() else {
+                throw TimeoutError()
+            }
+            group.cancelAll()
+            return result
+        }
+    }
+
+    private static func decodeSegments(from text: String) throws -> [BackendSegment]? {
+        guard let data = text.data(using: .utf8) else { return nil }
+        let json = try JSONSerialization.jsonObject(with: data)
+        guard json is [[String: Any]] else { return nil }
+        return try JSONDecoder().decode([BackendSegment].self, from: data)
+    }
 }
+
+private struct TimeoutError: Error {}
 
 /// Response model for Python backend `/v2/voice-message/transcribe` (batch PTT)
 private struct PythonTranscribeResponse: Decodable {

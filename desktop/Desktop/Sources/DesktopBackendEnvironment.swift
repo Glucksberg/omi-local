@@ -28,9 +28,6 @@ enum DesktopBackendEnvironment {
     environmentValue: String? = currentEnvironmentValue("OMI_PYTHON_API_URL")
   ) -> String {
     if LocalMode.isEnabled {
-      if let url = normalizedURL(environmentValue) {
-        return url
-      }
       return LocalMode.localAPIURL
     }
 

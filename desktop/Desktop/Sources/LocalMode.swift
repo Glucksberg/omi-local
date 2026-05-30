@@ -14,7 +14,9 @@ enum LocalMode {
   static let defaultRemoteLLMModel = "gpt-5.5"
 
   static var isEnabled: Bool {
-    CommandLine.arguments.contains("--local-mode") || envFlag("OMI_LOCAL_MODE")
+    CommandLine.arguments.contains("--local-mode")
+      || envFlag("OMI_LOCAL_MODE")
+      || Bundle.main.bundleIdentifier == "com.omi.omi-local"
   }
 
   static var isAgentBridgeEnabled: Bool {
@@ -108,13 +110,20 @@ enum LocalMode {
   }
 
   static var localAPIURL: String {
-    if let raw = getenv("OMI_API_URL").flatMap({ String(validatingUTF8: $0) }), !raw.isEmpty {
+    if let raw = getenv("OMI_API_URL").flatMap({ String(validatingUTF8: $0) }), isLoopbackURL(raw) {
       return raw.hasSuffix("/") ? raw : raw + "/"
     }
-    if let raw = getenv("OMI_DESKTOP_API_URL").flatMap({ String(validatingUTF8: $0) }), !raw.isEmpty {
+    if let raw = getenv("OMI_DESKTOP_API_URL").flatMap({ String(validatingUTF8: $0) }), isLoopbackURL(raw) {
       return raw.hasSuffix("/") ? raw : raw + "/"
     }
     return defaultLocalAPIURL
+  }
+
+  private static func isLoopbackURL(_ raw: String) -> Bool {
+    guard let url = URL(string: raw), let host = url.host?.lowercased() else {
+      return false
+    }
+    return host == "localhost" || host == "127.0.0.1" || host == "::1"
   }
 
   static var localAIProxyURL: String? {

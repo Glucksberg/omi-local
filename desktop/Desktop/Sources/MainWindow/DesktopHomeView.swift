@@ -199,7 +199,9 @@ struct DesktopHomeView: View {
               }
 
               // Start Crisp chat in background for notifications
-              CrispManager.shared.start()
+              if !LocalMode.isEnabled {
+                CrispManager.shared.start()
+              }
 
               // Set up floating control bar (only show if user hasn't disabled it)
               FloatingControlBarManager.shared.setup(

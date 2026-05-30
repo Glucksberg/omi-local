@@ -4209,6 +4209,15 @@ extension APIClient {
     sessionId: String? = nil,
     metadata: String? = nil
   ) async throws -> SaveMessageResponse {
+    if LocalMode.isEnabled {
+      return try await LocalChatStore.shared.saveMessage(
+        text: text,
+        sender: sender,
+        appId: appId,
+        sessionId: sessionId,
+        metadata: metadata
+      )
+    }
     struct SaveRequest: Encodable {
       let text: String
       let sender: String
@@ -4227,6 +4236,14 @@ extension APIClient {
     limit: Int = 100,
     offset: Int = 0
   ) async throws -> [ChatMessageDB] {
+    if LocalMode.isEnabled {
+      return try await LocalChatStore.shared.fetchMessages(
+        appId: appId,
+        sessionId: nil,
+        limit: limit,
+        offset: offset
+      )
+    }
     var queryItems: [String] = [
       "limit=\(limit)",
       "offset=\(offset)",
@@ -4242,6 +4259,9 @@ extension APIClient {
 
   /// Clear chat message history
   func deleteMessages(appId: String? = nil) async throws -> MessageDeleteResponse {
+    if LocalMode.isEnabled {
+      return try await LocalChatStore.shared.deleteMessages(appId: appId)
+    }
     var endpoint = "v2/desktop/messages"
     if let appId = appId {
       endpoint += "?app_id=\(appId)"
@@ -4275,6 +4295,14 @@ extension APIClient {
     limit: Int = 100,
     offset: Int = 0
   ) async throws -> [ChatMessageDB] {
+    if LocalMode.isEnabled {
+      return try await LocalChatStore.shared.fetchMessages(
+        appId: nil,
+        sessionId: sessionId,
+        limit: limit,
+        offset: offset
+      )
+    }
     let queryItems: [String] = [
       "session_id=\(sessionId)",
       "limit=\(limit)",
@@ -4331,6 +4359,9 @@ extension APIClient {
     title: String? = nil,
     appId: String? = nil
   ) async throws -> ChatSession {
+    if LocalMode.isEnabled {
+      return try await LocalChatStore.shared.createSession(title: title, appId: appId)
+    }
     struct CreateRequest: Encodable {
       let title: String?
       let app_id: String?
@@ -4346,6 +4377,10 @@ extension APIClient {
     offset: Int = 0,
     starred: Bool? = nil
   ) async throws -> [ChatSession] {
+    if LocalMode.isEnabled {
+      let all = try await LocalChatStore.shared.fetchSessions(appId: appId, starred: starred)
+      return Array(all.dropFirst(offset).prefix(limit))
+    }
     var queryItems: [String] = [
       "limit=\(limit)",
       "offset=\(offset)",
@@ -4368,6 +4403,16 @@ extension APIClient {
     title: String? = nil,
     starred: Bool? = nil
   ) async throws -> ChatSession {
+    if LocalMode.isEnabled {
+      guard let session = try await LocalChatStore.shared.updateSession(
+        sessionId: sessionId,
+        title: title,
+        starred: starred
+      ) else {
+        throw LocalChatStoreError.databaseUnavailable
+      }
+      return session
+    }
     struct UpdateRequest: Encodable {
       let title: String?
       let starred: Bool?
@@ -4378,6 +4423,10 @@ extension APIClient {
 
   /// Delete a chat session and its messages
   func deleteChatSession(sessionId: String) async throws {
+    if LocalMode.isEnabled {
+      try await LocalChatStore.shared.deleteSession(sessionId: sessionId)
+      return
+    }
     try await delete("v2/chat-sessions/\(sessionId)")
   }
 
@@ -4429,6 +4478,10 @@ extension APIClient {
 /// Response from generating session title
 struct GenerateTitleResponse: Codable {
   let title: String
+
+  init(title: String) {
+    self.title = title
+  }
 }
 
 /// Response from generating initial message
@@ -4452,6 +4505,11 @@ struct SaveMessageResponse: Codable {
   enum CodingKeys: String, CodingKey {
     case id
     case createdAt = "created_at"
+  }
+
+  init(id: String, createdAt: Date) {
+    self.id = id
+    self.createdAt = createdAt
   }
 }
 
@@ -4484,6 +4542,26 @@ struct ChatMessageDB: Codable, Identifiable {
     rating = try container.decodeIfPresent(Int.self, forKey: .rating)
     reported = try container.decodeIfPresent(Bool.self, forKey: .reported) ?? false
   }
+
+  init(
+    id: String,
+    text: String,
+    createdAt: Date,
+    sender: String,
+    appId: String?,
+    sessionId: String?,
+    rating: Int?,
+    reported: Bool
+  ) {
+    self.id = id
+    self.text = text
+    self.createdAt = createdAt
+    self.sender = sender
+    self.appId = appId
+    self.sessionId = sessionId
+    self.rating = rating
+    self.reported = reported
+  }
 }
 
 /// Response from deleting messages
@@ -4500,6 +4578,11 @@ struct MessageDeleteResponse: Codable {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     status = try container.decodeIfPresent(String.self, forKey: .status) ?? "ok"
     deletedCount = try container.decodeIfPresent(Int.self, forKey: .deletedCount)
+  }
+
+  init(status: String, deletedCount: Int?) {
+    self.status = status
+    self.deletedCount = deletedCount
   }
 }
 
@@ -4750,6 +4833,7 @@ extension APIClient {
     costUsd: Double,
     account: String = "omi"
   ) async {
+    guard !LocalMode.isEnabled else { return }
     struct Req: Encodable {
       let input_tokens: Int
       let output_tokens: Int
@@ -4778,6 +4862,7 @@ extension APIClient {
   }
 
   func fetchTotalOmiAICost() async -> Double? {
+    guard !LocalMode.isEnabled else { return nil }
     struct Res: Decodable { let total_cost_usd: Double }
     do {
       log("APIClient: Fetching total Omi AI cost from backend")
@@ -4818,6 +4903,7 @@ extension APIClient {
   }
 
   func fetchChatUsageQuota() async -> ChatUsageQuota? {
+    guard !LocalMode.isEnabled else { return nil }
     do {
       let res: ChatUsageQuota = try await get("v1/users/me/usage-quota")
       log(

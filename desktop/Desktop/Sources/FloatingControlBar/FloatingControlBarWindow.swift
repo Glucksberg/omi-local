@@ -29,6 +29,7 @@ class FloatingControlBarWindow: NSPanel, NSWindowDelegate {
     private static let defaultBaseResponseHeight: CGFloat = 430
     /// Overhead (px) added to measured scroll content to account for control bar, header, follow-up input, and padding.
     private static let responseViewOverhead: CGFloat = 190
+    private static let screenEdgePadding: CGFloat = 16
 
     let state = FloatingControlBarState()
     private var hostingView: NSHostingView<AnyView>?
@@ -537,18 +538,48 @@ class FloatingControlBarWindow: NSPanel, NSWindowDelegate {
         )
     }
 
+    private func screenForConstrainedResize(proposedOrigin: NSPoint, proposedSize: NSSize) -> NSScreen? {
+        let proposedFrame = NSRect(origin: proposedOrigin, size: proposedSize)
+        return screen
+            ?? NSScreen.screens.first { $0.visibleFrame.intersects(proposedFrame) }
+            ?? NSScreen.screens.first { $0.visibleFrame.contains(NSPoint(x: frame.midX, y: frame.midY)) }
+            ?? NSScreen.main
+    }
+
+    private func constrainToVisibleScreen(origin: NSPoint, size: NSSize) -> (origin: NSPoint, size: NSSize) {
+        guard let targetScreen = screenForConstrainedResize(proposedOrigin: origin, proposedSize: size) else {
+            return (origin, size)
+        }
+
+        let visible = targetScreen.visibleFrame.insetBy(dx: Self.screenEdgePadding, dy: Self.screenEdgePadding)
+        let constrainedSize = NSSize(
+            width: min(max(size.width, Self.minBarSize.width), max(Self.minBarSize.width, visible.width)),
+            height: min(max(size.height, Self.minBarSize.height), max(Self.minBarSize.height, visible.height))
+        )
+
+        let maxX = visible.maxX - constrainedSize.width
+        let maxY = visible.maxY - constrainedSize.height
+        let clampedX = min(max(origin.x, visible.minX), maxX)
+        let clampedY = min(max(origin.y, visible.minY), maxY)
+
+        return (NSPoint(x: clampedX, y: clampedY), constrainedSize)
+    }
+
     private func resizeAnchored(to size: NSSize, makeResizable: Bool, animated: Bool = false, anchorTop: Bool = false) {
         // Cancel any pending resizeToFixedHeight work item to prevent stale resizes
         resizeWorkItem?.cancel()
         resizeWorkItem = nil
 
-        let constrainedSize = NSSize(
+        let requestedSize = NSSize(
             width: max(size.width, FloatingControlBarWindow.minBarSize.width),
             height: max(size.height, FloatingControlBarWindow.minBarSize.height)
         )
-        let newOrigin = anchorTop
-            ? originForTopCenterAnchor(newSize: constrainedSize)
-            : originForCenterAnchor(newSize: constrainedSize)
+        let requestedOrigin = anchorTop
+            ? originForTopCenterAnchor(newSize: requestedSize)
+            : originForCenterAnchor(newSize: requestedSize)
+        let constrained = constrainToVisibleScreen(origin: requestedOrigin, size: requestedSize)
+        let constrainedSize = constrained.size
+        let newOrigin = constrained.origin
 
         log("FloatingControlBar: resizeAnchored to \(constrainedSize) resizable=\(makeResizable) animated=\(animated) from=\(frame.size)")
 
