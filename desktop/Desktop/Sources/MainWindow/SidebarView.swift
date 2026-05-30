@@ -85,12 +85,14 @@ struct SidebarView: View {
   @ObservedObject private var deviceProvider = DeviceProvider.shared
   @ObservedObject private var updaterViewModel = UpdaterViewModel.shared
   @ObservedObject private var crispManager = CrispManager.shared
+  @ObservedObject private var shortcutSettings = ShortcutSettings.shared
 
   // State for Get Omi Widget (shown when no device is paired, dismissible)
   @AppStorage("showGetOmiWidget") private var showGetOmiWidget = true
 
   // Tier gating (0 = show all, 1-6 = sequential tiers)
   @AppStorage("currentTierLevel") private var currentTierLevel = 0
+  @AppStorage("chatBridgeMode") private var chatBridgeMode = ChatProvider.BridgeMode.piMono.rawValue
 
   // Toggle states for quick controls
   @AppStorage("screenAnalysisEnabled") private var screenAnalysisEnabled = true
@@ -973,6 +975,10 @@ struct SidebarView: View {
 
   private var permissionStatusSection: some View {
     VStack(spacing: 6) {
+      if !isCollapsed {
+        modelStatusTags
+      }
+
       if shouldShowScreenRecordingStatus {
         screenRecordingPermissionRow(isExpanded: !isCollapsed)
       }
@@ -985,6 +991,113 @@ struct SidebarView: View {
         accessibilityPermissionRow(isExpanded: !isCollapsed)
       }
     }
+  }
+
+  private var modelStatusTags: some View {
+    VStack(alignment: .leading, spacing: 5) {
+      HStack(spacing: 5) {
+        modelStatusTag(label: "STT", value: currentSTTModelLabel, color: OmiColors.purplePrimary)
+        modelStatusTag(label: "LLM", value: currentLLMModelLabel, color: OmiColors.info)
+      }
+
+      modelStatusTag(label: "TTS", value: currentTTSModelLabel, color: OmiColors.success)
+    }
+    .padding(.horizontal, 10)
+    .padding(.vertical, 8)
+    .background(
+      RoundedRectangle(cornerRadius: 10)
+        .fill(OmiColors.backgroundSecondary.opacity(0.75))
+    )
+    .overlay(
+      RoundedRectangle(cornerRadius: 10)
+        .stroke(OmiColors.border.opacity(0.45), lineWidth: 1)
+    )
+    .help("Current voice, transcription, and chat models")
+  }
+
+  private func modelStatusTag(label: String, value: String, color: Color) -> some View {
+    HStack(spacing: 5) {
+      Text(label)
+        .scaledFont(size: 9, weight: .bold)
+        .foregroundColor(color)
+        .fixedSize()
+
+      Text(value)
+        .scaledFont(size: 10, weight: .semibold)
+        .foregroundColor(OmiColors.textSecondary)
+        .lineLimit(1)
+        .truncationMode(.middle)
+    }
+    .padding(.horizontal, 7)
+    .padding(.vertical, 4)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(
+      Capsule()
+        .fill(color.opacity(0.12))
+    )
+    .overlay(
+      Capsule()
+        .stroke(color.opacity(0.28), lineWidth: 1)
+    )
+  }
+
+  private var currentSTTModelLabel: String {
+    let service = Self.envValue("OMI_STT_SERVICE")?.lowercased()
+    if service == "parakeet" || (LocalMode.isEnabled && service == nil) {
+      return "Parakeet v3"
+    }
+    if service == "deepgram" {
+      return "Nova-3"
+    }
+    if APIKeyService.byokKey(.parakeet) != nil {
+      return "Parakeet v3"
+    }
+    return LocalMode.isEnabled ? "Local STT" : "Nova-3"
+  }
+
+  private var currentTTSModelLabel: String {
+    if LocalMode.isEnabled {
+      guard LocalMode.isTTSEnabled else {
+        return "macOS voice"
+      }
+
+      let provider = Self.envValue("OMI_LOCAL_TTS_PROVIDER")?.lowercased() ?? "local"
+      if provider == "xai" {
+        let voice = ShortcutSettings.voiceOption(for: shortcutSettings.selectedVoiceID).name
+        return "xAI \(voice)"
+      }
+      if provider == "kokoro" {
+        return "Kokoro"
+      }
+      return "macOS say"
+    }
+
+    let voice = ShortcutSettings.voiceOption(for: shortcutSettings.selectedVoiceID).name
+    return "ElevenLabs \(voice)"
+  }
+
+  private var currentLLMModelLabel: String {
+    if LocalMode.isRemoteLLMEnabled {
+      let provider = LocalMode.remoteLLMProvider ?? "remote"
+      return "\(provider) \(LocalMode.remoteLLMModel)"
+    }
+
+    if chatBridgeMode == ChatProvider.BridgeMode.userClaude.rawValue {
+      return ModelQoS.Claude.chat
+    }
+
+    let selected = shortcutSettings.selectedModel.isEmpty
+      ? ModelQoS.Claude.defaultSelection
+      : shortcutSettings.selectedModel
+    return LocalMode.isEnabled ? selected : "Omi AI"
+  }
+
+  private static func envValue(_ name: String) -> String? {
+    guard let raw = getenv(name).flatMap({ String(validatingUTF8: $0) }) else {
+      return nil
+    }
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
   }
 
   @ViewBuilder
